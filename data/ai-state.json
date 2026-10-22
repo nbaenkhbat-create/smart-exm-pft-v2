@@ -1,0 +1,11 @@
+{
+  "enabled": false,
+  "start": "08:00",
+  "end": "18:00",
+  "extraEmail": "",
+  "simLogin": "",
+  "simUid": "",
+  "lastTick": 0,
+  "lastReportAt": 0,
+  "commands": []
+}
