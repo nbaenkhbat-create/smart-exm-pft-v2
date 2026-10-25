@@ -2137,7 +2137,7 @@ const authErrText = (e) => {
     'auth/operation-not-allowed': 'Firebase Console → Authentication → Sign-in method дотор "Email/Password"-г идэвхжүүлнэ үү.',
     'auth/network-request-failed': 'Интернет холболт тасарлаа. Дахин оролдоно уу.',
     'auth/too-many-requests': 'Хэт олон оролдлого хийлээ. Түр хүлээгээд дахин оролдоно уу.',
-    'auth/user-not-found': 'Бүртгэл олдсонгүй. "Шинээр бүртгүүлэх" хэсгээр бүртгүүлнэ үү.',
+    'auth/user-not-found': 'Бүртгэл олдсонгүй. Нэвтрэх нэрээ шалгана уу (багшийн эрхийг админ үүсгэнэ).',
     'auth/wrong-password': 'Нэвтрэх нэр эсвэл нууц үг буруу байна.',
     'auth/invalid-credential': 'Нэвтрэх нэр эсвэл нууц үг буруу байна.',
     'auth/configuration-not-found': 'Firebase Authentication идэвхгүй байна.',
@@ -3085,8 +3085,6 @@ function LandingPage({ onSelect }) {
 
 // ─── TEACHER LOGIN (Firebase Auth) ───────────────────────────────────────────
 function TeacherLogin({ onLogin }) {
-  const [mode, setMode] = useState('login');
-  const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPass, setShowPass] = useState(false);
@@ -3095,16 +3093,13 @@ function TeacherLogin({ onLogin }) {
 
   const handle = async () => {
     setErr('');
-    if (mode === 'reg' && !fullName.trim()) { setErr('Овог нэрээ оруулна уу'); return; }
     if (!email.trim() || !password) { setErr('Нэвтрэх нэр болон нууц үг оруулна уу'); return; }
     if (password.length < 6) { setErr('Нууц үг дор хаяж 6 тэмдэгт'); return; }
     setBusy(true);
     try {
-      const user = mode === 'reg'
-        ? await teacherSignUp(email, password, fullName)
-        : await teacherSignIn(email, password);
-      if (user && user.dbWarning) { try { alert('Бүртгэл үүслээ, гэвч profile хадгалахад алдаа гарлаа:\n' + user.dbWarning); } catch {} }
-      const display = sanitizeText(user.displayName || fullName || email.split('@')[0], 80);
+      const user = await teacherSignIn(email, password);
+      if (user && user.dbWarning) { try { alert('Нэвтрэлт амжилттай, гэвч profile хадгалахад алдаа гарлаа:\n' + user.dbWarning); } catch {} }
+      const display = sanitizeText(user.displayName || email.split('@')[0], 80);
       try {
         localStorage.setItem(SE_TEACHER, display);
         if (window.SESecurity) SESecurity.saveTeacherMeta({ uid: user.uid, email: user.email, displayName: display });
@@ -3124,42 +3119,33 @@ function TeacherLogin({ onLogin }) {
           <div style={{display:'flex',alignItems:'center',gap:10}}>
             <span style={{fontSize:'1.4rem'}}>🔐</span>
             <div>
-              <div style={{fontFamily:'Outfit',fontWeight:800,fontSize:'1.1rem'}}>{mode === 'reg' ? 'Багш бүртгүүлэх' : 'Багшийн нэвтрэлт'}</div>
-              <div style={{fontSize:'0.8rem',color:'var(--text2)'}}>{mode === 'reg' ? 'Шинэ багшийн эрх үүсгэх' : 'Нэвтрэх нэр / нууц үгээ оруулна уу'}</div>
+              <div style={{fontFamily:'Outfit',fontWeight:800,fontSize:'1.1rem'}}>Багшийн нэвтрэлт</div>
+              <div style={{fontSize:'0.8rem',color:'var(--text2)'}}>Нэвтрэх нэр / нууц үгээ оруулна уу</div>
             </div>
           </div>
         </div>
         <div className="modal-body">
-          {mode === 'reg' && (
-            <div className="form-group">
-              <label className="form-label">Овог нэр</label>
-              <input className="form-input" autoComplete="name" placeholder="жишээ: Б.Болд"
-                value={fullName} onChange={e => setFullName(e.target.value)} autoFocus />
-            </div>
-          )}
           <div className="form-group">
             <label className="form-label">Нэвтрэх нэр</label>
             <input className="form-input" autoComplete="username" placeholder="жишээ: bagsh01"
-              value={email} onChange={e => setEmail(e.target.value)} autoFocus={mode !== 'reg'}
+              value={email} onChange={e => setEmail(e.target.value)} autoFocus
               onKeyDown={e => e.key === 'Enter' && !busy && handle()} />
           </div>
           <div className="form-group">
             <label className="form-label">Нууц үг</label>
             <div style={{display:'flex',gap:8}}>
-              <input className="form-input" type={showPass ? 'text' : 'password'} autoComplete={mode === 'reg' ? 'new-password' : 'current-password'}
+              <input className="form-input" type={showPass ? 'text' : 'password'} autoComplete="current-password"
                 placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && !busy && handle()} style={{flex:1}} />
               <button type="button" className="btn btn-outline btn-sm" onClick={() => setShowPass(s => !s)}>{showPass ? '🙈' : '👁'}</button>
             </div>
           </div>
+          <div className="form-hint">Шинээр бүртгүүлэх боломжгүй — багшийн эрхийг зөвхөн админ үүсгэнэ (админы «Багш нар» хэсэг).</div>
           {err && <div className="form-error">⚠ {err}</div>}
         </div>
         <div className="modal-foot" style={{flexWrap:'wrap',gap:8}}>
           <button className="btn btn-primary btn-lg" onClick={handle} disabled={busy}>
-            {busy ? '⏳ ...' : (mode === 'reg' ? '✅ Бүртгүүлэх' : '▶ Нэвтрэх')}
-          </button>
-          <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => { setErr(''); setMode(m => m === 'reg' ? 'login' : 'reg'); }}>
-            {mode === 'reg' ? 'Бүртгэлтэй юу? Нэвтрэх' : 'Шинээр бүртгүүлэх'}
+            {busy ? '⏳ ...' : '▶ Нэвтрэх'}
           </button>
         </div>
       </div>
@@ -9480,6 +9466,107 @@ const seSendEmail = async (toList, subject, message) => {
   return results;
 };
 
+/* ── AI1-ийн JSON-ыг хуудас дээр ашиглах боломжтой бодит тест болгох ── */
+const seAiParseJson = (text) => {
+  try { const m = String(text || '').match(/\{[\s\S]*\}/); return m ? JSON.parse(m[0]) : null; } catch { return null; }
+};
+
+const seAiBuildExam = (raw, owner) => {
+  if (!raw) return null;
+  const src = Array.isArray(raw.q) ? raw.q : (Array.isArray(raw.questions) ? raw.questions : []);
+  const qs = [];
+  src.forEach((item) => {
+    const q = item || {};
+    const text = String(q.t || q.text || q.question || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+    if (!text) return;
+    const rawOpts = Array.isArray(q.opts) ? q.opts : (Array.isArray(q.options) ? q.options : []);
+    const options = rawOpts
+      .map((t, k) => ({ key: alpha(k), text: String(t && typeof t === 'object' ? (t.text || '') : t).trim().slice(0, 200) }))
+      .filter((o) => o.text);
+    const ansRaw = q.ans != null ? q.ans : q.answer;
+    let type = q.type;
+    if (type !== 'mcq' && type !== 'blank' && type !== 'open') type = options.length >= 2 ? 'mcq' : 'blank';
+    if (type === 'mcq' && options.length < 2) type = 'blank';
+    const id = qs.length + 1;
+    if (type === 'mcq') {
+      const a = String(ansRaw == null ? '' : ansRaw).trim();
+      const hit = options.find((o) => o.text.toLowerCase() === a.toLowerCase());
+      const letter = /^[A-Fa-f]$/.test(a) ? a.toUpperCase() : '';
+      const key = hit ? hit.key : (options.some((o) => o.key === letter) ? letter : options[0].key);
+      qs.push({ id, type: 'mcq', text, options, answer: key });
+    } else if (type === 'open') {
+      qs.push({ id, type: 'open', text, answer: '' });
+    } else {
+      qs.push({ id, type: 'blank', text, answer: String(ansRaw == null ? '' : ansRaw).trim().slice(0, 200) });
+    }
+  });
+  if (!qs.length) return null;
+  return {
+    id: 'sim-' + Date.now(),
+    title: String(raw.title || 'AI дасгал').replace(/\s+/g, ' ').trim().slice(0, 120) || 'AI дасгал',
+    subject: 'English', duration: 0, passingScore: 60, maxAttempts: 0, scoreMode: 'best',
+    antiCheat: false, published: true, aiGenerated: true, owner: owner || 'sim',
+    questions: qs, variants: [{ label: 'A', questions: qs }],
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+  };
+};
+
+/* AI2-ийн хариултыг сурагчийн бодит оролдлогын хэлбэрээр дүгнэх */
+const seAiBuildSubmission = (exam, text) => {
+  if (!exam || !exam.questions) return null;
+  const parsed = seAiParseJson(text);
+  const list = parsed && Array.isArray(parsed.answers) ? parsed.answers : null;
+  if (!list) return null;
+  const answers = {};
+  exam.questions.forEach((q, i) => {
+    const a = list[i] != null ? list[i] : (q.id != null ? list.find((x) => x && x.id === q.id) : null);
+    if (a == null || a === '') return;
+    if (q.type === 'mcq') {
+      const s = String(a).trim();
+      const hit = (q.options || []).find((o) => o.text.toLowerCase() === s.toLowerCase());
+      const letter = /^[A-Fa-f]$/.test(s) ? s.toUpperCase() : '';
+      answers[q.id] = hit ? hit.key : ((q.options || []).some((o) => o.key === letter) ? letter : s.slice(0, 4));
+    } else {
+      answers[q.id] = String(a).slice(0, 200);
+    }
+  });
+  let correct = 0, total = 0;
+  exam.questions.forEach((q) => {
+    if (q.answer == null || q.answer === '') return;
+    total++;
+    if (answersEqual(answers[q.id], q.answer, q.type)) correct++;
+  });
+  if (!total) return null;
+  const score = Math.round((correct / total) * 100);
+  const now = new Date().toISOString();
+  return {
+    id: 'aisub-' + exam.id, examId: exam.id, answers, score, correctCount: correct, totalCount: total,
+    studentName: 'AI2 сурагч', studentClass: 'Симуляц', submittedAt: now, at: now,
+    verified: true, gradedBy: 'ai', aiGenerated: true
+  };
+};
+
+/* AI-ийн ажлыг бодитоор хуудас дээр гаргах: тест → «Шалгалт», хариулт → «Үр дүн» */
+const seAiPublishWork = (exam, sub) => {
+  try {
+    const exams = JSON.parse(localStorage.getItem('se_exams') || '[]');
+    const human = exams.filter((e) => e && !e.aiGenerated);
+    const ai = exams.filter((e) => e && e.aiGenerated && e.id !== (exam && exam.id));
+    if (exam) ai.push(exam);
+    localStorage.setItem('se_exams', JSON.stringify(human.concat(ai.slice(-3))));
+  } catch (e) { console.warn('seAiPublishWork exams', e && e.message); }
+  if (sub) {
+    try {
+      const subs = JSON.parse(localStorage.getItem('se_submissions') || '[]');
+      const human = subs.filter((s) => s && !s.aiGenerated);
+      const ai = subs.filter((s) => s && s.aiGenerated && s.examId !== sub.examId);
+      ai.push(sub);
+      localStorage.setItem('se_submissions', JSON.stringify(human.concat(ai.slice(-6))));
+    } catch (e) { console.warn('seAiPublishWork subs', e && e.message); }
+  }
+  try { window.dispatchEvent(new CustomEvent('se_ai_work', { detail: { examId: exam ? exam.id : '' } })); } catch {}
+};
+
 /* AI1–AI4 ажилтнууд: server.js байхгүй үед (GitHub Pages) хуудас нээлттэй байхад браузер дээр ажиллана */
 async function seStaticTick() {
   const st = seAiState();
@@ -9504,33 +9591,34 @@ async function seStaticTick() {
     }
 
     const a1 = await seGroq([
-      { role: 'system', content: sys + ' You are AI1 Teacher. Output JSON only: {"title":"","q":[{"t":"","type":"mcq|blank|match|open","opts":[],"ans":""}]} 2-3 questions, English grade 11 style.' },
-      { role: 'user', content: 'Make a tiny practice set. Topic rotate: vocab match / gerund / so that.' }
-    ], 320);
+      { role: 'system', content: 'You are AI1, an English teacher. Output ONLY one complete ASCII-JSON object, no markdown, no commentary, no Cyrillic: {"title":"...","q":[{"t":"question text","type":"mcq","opts":["a","b","c","d"],"ans":"exact option text"}]} . Use type mcq (4 opts) or blank (opts:[]). Exactly 5 questions. Every JSON string must be closed.' },
+      { role: 'user', content: 'Make a 5-question English practice set. Rotate topic: vocabulary / gerunds / so that / tenses.' }
+    ], 700);
     sePushChat('AI1', a1, { kind: 'teach' });
-    let exam = null;
-    try {
-      const m = a1.match(/\{[\s\S]*\}/);
-      exam = m ? JSON.parse(m[0]) : { title: 'AI дасгал', q: [] };
-    } catch { exam = { title: 'AI дасгал', raw: a1.slice(0, 400) }; }
-    exam.id = 'sim-' + Date.now();
-    exam.at = new Date().toISOString();
-    exam.owner = st.simLogin || 'sim';
-    ws.exams = (ws.exams || []).slice(-20).concat([exam]);
+    const examJson = seAiParseJson(a1);
+    const appExam = seAiBuildExam(examJson, st.simLogin || 'sim');
+    if (appExam) {
+      ws.exams = (ws.exams || []).slice(-20).concat([{ id: appExam.id, title: appExam.title, at: appExam.createdAt, owner: appExam.owner }]);
+    }
 
     const a2 = await seGroq([
-      { role: 'system', content: sys + ' You are AI2 Student. Answer the quiz briefly as JSON {"answers":[]}' },
-      { role: 'user', content: JSON.stringify(exam).slice(0, 900) }
-    ], 200);
+      { role: 'system', content: 'You are AI2, a student. Reply with ONLY complete ASCII-JSON {"answers":[...]} — one answer per question, in order, matching each option text exactly. No markdown, no Cyrillic, no extra text.' },
+      { role: 'user', content: JSON.stringify(appExam ? { title: appExam.title, q: appExam.questions.map((q) => ({ t: q.text, type: q.type, opts: (q.options || []).map((o) => o.text) })) } : (examJson || {})).slice(0, 1600) }
+    ], 400);
     sePushChat('AI2', a2, { kind: 'student' });
-    ws.studentWork = (ws.studentWork || []).slice(-20).concat([{ examId: exam.id, a2: a2, at: exam.at }]);
+    ws.studentWork = (ws.studentWork || []).slice(-20).concat([{ examId: appExam ? appExam.id : '', a2: a2, at: new Date().toISOString() }]);
+    // Бодит үр дүн: тест → багшийн «Шалгалт», хариулт → «Үр дүн» (админд түүхий текст очихгүй)
+    if (appExam) {
+      const sub = seAiBuildSubmission(appExam, a2);
+      seAiPublishWork(appExam, sub);
+    }
 
     const a3 = await seGroq([
       { role: 'system', content: sys + ' You are AI3 auditor. Find bugs/unclear text. JSON {"bugs":[],"ideas":[]}' },
       { role: 'user', content: ('AI1:\n' + a1 + '\nAI2:\n' + a2 + '\nLOG:\n' + seCompactLogs(6)).slice(0, 1400) }
     ], 240);
     sePushChat('AI3', a3, { kind: 'audit' });
-    ws.audits = (ws.audits || []).slice(-20).concat([{ at: exam.at, a3: a3 }]);
+    ws.audits = (ws.audits || []).slice(-20).concat([{ at: appExam ? appExam.createdAt : new Date().toISOString(), a3: a3 }]);
     seSaveSim(ws);
   } catch (e) {
     sePushChat('SYS', 'AI алдаа: ' + ((e && e.message) || e), { kind: 'error' });
@@ -9596,17 +9684,23 @@ async function seStaticApi(path, opts) {
   }
   if (path === '/api/admin/ai/state' && method === 'GET') {
     const st = seAiState();
-    return { ok: true, state: st, inSchedule: seInSchedule(st), chat: seChat().slice(-80), sim: seSim(), staticMode: true };
+    // AI1/AI2-ын түүхий ажиллагааг админд үзүүлэхгүй (зөвхөн үр дүн нь тест/дүнгээр гарна)
+    const shown = seChat().filter((m) => m.role !== 'AI1' && m.role !== 'AI2');
+    return { ok: true, state: st, inSchedule: seInSchedule(st), chat: shown.slice(-80), sim: seSim(), staticMode: true };
   }
   if (path === '/api/admin/ai/state' && method === 'POST') {
     const st = seAiState();
+    const wasOn = !!st.enabled;
     if (typeof body.enabled === 'boolean') st.enabled = body.enabled;
     if (body.start) st.start = String(body.start).slice(0, 5);
     if (body.end) st.end = String(body.end).slice(0, 5);
     if (body.extraEmail != null) st.extraEmail = String(body.extraEmail).trim();
     if (body.simLogin != null) st.simLogin = String(body.simLogin).trim();
     seSaveAiState(st);
-    sePushChat('SYS', st.enabled ? ('AI асаалаа ' + st.start + '–' + st.end) : 'AI унтраалаа');
+    // Зөвхөн ON/OFF өөрчлөгдсөн үед л мэдэгдэл нэмнэ (ажил цаг/имэйл/нэр солих бүрт давтдаг байсан)
+    if (typeof body.enabled === 'boolean' && !!st.enabled !== wasOn) {
+      sePushChat('SYS', st.enabled ? ('AI асаалаа ' + st.start + '–' + st.end) : 'AI унтраалаа');
+    }
     return { ok: true, state: st };
   }
   if (path === '/api/admin/ai/command' && method === 'POST') {
@@ -9757,7 +9851,7 @@ function AdminApp() {
               } catch (e) { alert(e.message); }
             }}>Үүсгэх</button>
           </div>
-          <div className="form-hint" style={{marginTop:8}}>Багш өөрөө мөн нүүр хуудаснаас бүртгүүлж болно. Энд үүсгэсэн эрхээр ч нэвтэрнэ.</div>
+          <div className="form-hint" style={{marginTop:8}}>Багш өөрөө бүртгүүлдэггүй — зөвхөн энд үүсгэсэн нэвтрэх нэр/нууц үгээр л нэвтэрнэ.</div>
           <table className="tbl" style={{marginTop:14}}><thead><tr><th>Нэвтрэх нэр</th><th>Нэр</th><th>UID</th></tr></thead>
             <tbody>{teachers.map(t => <tr key={t.login}><td>{t.login}</td><td>{t.name}</td><td style={{fontSize:'.75rem'}}>{t.uid}</td></tr>)}</tbody>
           </table>
@@ -9832,6 +9926,27 @@ function App() {
   );
   const [exams, setExams] = useLS('se_exams', []);
   const [submissions, setSubmissions] = useLS('se_submissions', []);
+  // AI1/AI2-ийн бодит ажил (шинэ тест, сурагчийн хариулт) localStorage-д бичигдсэнийг шинэчилж авна
+  useEffect(() => {
+    const applyAiWork = () => {
+      try {
+        const raw = localStorage.getItem('se_exams');
+        const parsed = raw ? JSON.parse(raw) : [];
+        if (Array.isArray(parsed)) setExams((prev) => (JSON.stringify(prev) === raw ? prev : parsed));
+      } catch {}
+      try {
+        const raw = localStorage.getItem('se_submissions');
+        const parsed = raw ? JSON.parse(raw) : [];
+        if (Array.isArray(parsed)) setSubmissions((prev) => (JSON.stringify(prev) === raw ? prev : parsed));
+      } catch {}
+    };
+    window.addEventListener('se_ai_work', applyAiWork);
+    window.addEventListener('storage', applyAiWork);
+    return () => {
+      window.removeEventListener('se_ai_work', applyAiWork);
+      window.removeEventListener('storage', applyAiWork);
+    };
+  }, [setExams, setSubmissions]);
   const [restoring, setRestoring] = useState(false);
   const restoreExams = useCallback(async (silent) => {
     setRestoring(true);
