@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="mn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SmartEXAM</title>
+<script>
+/* GitHub Pages deep-link fallback.
+   /repo/amdin-by-e-c-1771 шиг линк дээр Pages 404 буцдаг тул энд index.html руу
+   анхны path-ийг ?redirect= утгатай авч явна. index.html үүнийг сэргээж,
+   админ хуудас (AdminApp) шууд нээгдэнэ. LAN сервер дээр (server.js) энэ файл ашиглагдахгүй. */
+(function () {
+  var l = window.location;
+  var path = l.pathname + l.search;
+  if (/\/api\//.test(path)) { document.write('Not found'); return; }
+  var base = '/';
+  var m = l.pathname.match(/^(.*)\/(?:admin|amdin)-by-e-c-1771\/?$/i);
+  if (m) {
+    base = (m[1] || '') + '/';
+  } else if (/\.github\.io$/.test(l.hostname)) {
+    var seg = l.pathname.split('/')[1];
+    base = seg ? '/' + seg + '/' : '/';
+  }
+  l.replace(l.origin + base + '?redirect=' + encodeURIComponent(path));
+})();
+</script>
+</head>
+<body>Уншиж байна… <a href="/">Нүүр хуудас</a></body>
+</html>

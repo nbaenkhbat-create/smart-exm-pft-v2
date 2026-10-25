@@ -10,5 +10,220 @@
     "t": "2026-10-22T19:19:06.866Z",
     "role": "SYS",
     "text": "AI унтраалаа"
+  },
+  {
+    "id": "e9d2b831c48e",
+    "t": "2026-10-25T15:08:27.720Z",
+    "role": "SYS",
+    "text": "AI асаалаа 00:00–23:59"
+  },
+  {
+    "id": "3e3c6d687751",
+    "t": "2026-10-25T15:08:41.639Z",
+    "role": "SYS",
+    "text": "AI алдаа: 'model' : property 'model' is missing",
+    "kind": "error"
+  },
+  {
+    "id": "02d4bdbdf697",
+    "t": "2026-10-25T15:09:26.650Z",
+    "role": "SYS",
+    "text": "AI алдаа: 'model' : property 'model' is missing",
+    "kind": "error"
+  },
+  {
+    "id": "4a3f0416a870",
+    "t": "2026-10-25T15:10:11.394Z",
+    "role": "SYS",
+    "text": "AI алдаа: 'model' : property 'model' is missing",
+    "kind": "error"
+  },
+  {
+    "id": "5a1dff44e531",
+    "t": "2026-10-25T15:11:17.868Z",
+    "role": "AI1",
+    "text": "{\"title\":\"English Practice: Gerunds & Vocab\",\"q\":[{\"t\":\"Match 'persist' with its meaning.\",\"type\":\"match\",\"opts\":[\"to continue firmly\",\"to give up\"],\"ans\":\"to continue firmly\"},{\"t\":\"Fill in the blank: I enjoy ______ to music.\",\"type\":\"blank\",\"opts\":[\"listen\",\"listening\"],\"ans\":\"listening\"},{\"t\":\"Complete: She studied hard ______ she could pass.\",\"type\":\"open\",\"opts\":[],\"ans\":\"so that\"}]}",
+    "kind": "teach"
+  },
+  {
+    "id": "be864de773c2",
+    "t": "2026-10-25T15:11:18.161Z",
+    "role": "AI2",
+    "text": "{\"answers\":[\"to continue firmly\",\"listening\",\"so that\"]}",
+    "kind": "student"
+  },
+  {
+    "id": "a3edc0c5284d",
+    "t": "2026-10-25T15:11:18.580Z",
+    "role": "AI3",
+    "text": "{\"bugs\":[\"LOG: Missing 'model' property errors indicate schema validation failure.\",\"AI1: Truncated JSON in log suggests transmission error.\"],\"ideas\":[\"Add 'model' field to AI1/AI2 payloads.\",\"Implement JSON truncation detection in SYS.\"]}",
+    "kind": "audit"
+  },
+  {
+    "id": "09846ba96c54",
+    "t": "2026-10-25T15:12:03.077Z",
+    "role": "AI1",
+    "text": "{\"title\":\"English Practice: Gerunds & Vocab\",\"q\":[{\"t\":\"Match 'diligent' with its meaning.\",\"type\":\"match\",\"opts\":[\"hardworking\",\"lazy\"],\"ans\":\"hardworking\"},{\"t\":\"Fill in the blank: She enjoys _______ to music.\",\"type\":\"blank\",\"opts\":[],\"ans\":\"listening\"},{\"t\":\"Complete: He studied hard _______ he could pass.\",\"type\":\"open\",\"opts\":[],\"ans\":\"so that\"}]}",
+    "kind": "teach"
+  },
+  {
+    "id": "99646e5c1fe4",
+    "t": "2026-10-25T15:12:03.296Z",
+    "role": "AI2",
+    "text": "{\"answers\":[\"hardworking\",\"listening\",\"so that\"]}",
+    "kind": "student"
+  },
+  {
+    "id": "bdafd687aec6",
+    "t": "2026-10-25T15:12:03.694Z",
+    "role": "AI3",
+    "text": "{\"bugs\":[\"AI2 answers mismatch AI1 questions in log (persist vs diligent)\",\"AI1 JSON truncated in log\",\"Missing 'model' field in schema\"],\"ideas\":[\"Validate JSON completeness before processing\",\"Sync AI1/AI2 question-answer pairs\",\"Add schema validation for 'model' field\"]}",
+    "kind": "audit"
+  },
+  {
+    "id": "94576212eec1",
+    "t": "2026-10-25T15:12:48.117Z",
+    "role": "AI1",
+    "text": "{\"title\":\"Grade 11 English Practice\",\"q\":[{\"t\":\"Match 'despite' with its meaning.\",\"type\":\"match\",\"opts\":[\"although\",\"because\",\"so that\"],\"ans\":\"although\"},{\"t\":\"Fill in: She enjoys _______ to music.\",\"type\":\"blank\",\"opts\":[],\"ans\":\"listening\"},{\"t\":\"Choose the correct connector: He studied hard _______ he could pass.\",\"type\":\"mcq\",\"opts\":[\"so that\",\"because\",\"although\"],\"ans\":\"so that\"}]}",
+    "kind": "teach"
+  },
+  {
+    "id": "a8987b82d7aa",
+    "t": "2026-10-25T15:12:48.725Z",
+    "role": "AI2",
+    "text": "{\"answers\": [\"although\", \"listening\", \"so that\"]}",
+    "kind": "student"
+  },
+  {
+    "id": "07e803d9ea75",
+    "t": "2026-10-25T15:12:49.244Z",
+    "role": "AI3",
+    "text": "{\"bugs\":[\"AI1 JSON truncated in log\",\"AI2 answers mismatch AI1 questions (persist vs diligent)\",\"Missing 'model' field in schema\"],\"ideas\":[\"Validate JSON completeness before processing\",\"Add 'model' field to AI1/AI2 schemas\"]}",
+    "kind": "audit"
+  },
+  {
+    "id": "a0011ea8c57c",
+    "t": "2026-10-25T15:13:27.669Z",
+    "role": "ADMIN",
+    "text": "Status report: summarize what AI1-AI3 just produced in 30 words.",
+    "kind": "inbox"
+  },
+  {
+    "id": "7b7c159e8a8c",
+    "t": "2026-10-25T15:13:32.976Z",
+    "role": "AI4",
+    "text": "AI1 generated truncated English practice JSON. AI2 provided mismatched answers. AI3 identified schema validation failures, transmission errors, and data inconsistencies, recommending pre-processing JSON validation to resolve these recurring bugs.",
+    "kind": "command"
+  },
+  {
+    "id": "d6d0b5b69aca",
+    "t": "2026-10-25T15:13:33.424Z",
+    "role": "AI1",
+    "text": "{\"title\":\"English Practice: Vocab & Grammar\",\"q\":[{\"t\":\"Match 'meticulous' with its meaning.\",\"type\":\"match\",\"opts\":[\"careless\",\"extremely careful\",\"angry\"],\"ans\":\"extremely careful\"},{\"t\":\"Fill in the blank: 'She enjoys _______ novels in her free time.'\",\"type\":\"blank\",\"opts\":[\"read\",\"reading\",\"to read\"],\"ans\":\"reading\"},{\"t\":\"Complete: 'He studied hard _______ he could pass the exam.'\",\"type\":\"blank\",\"opts\":[\"so that\",\"because\",\"although\"],\"ans\":\"so that\"}]}",
+    "kind": "teach"
+  },
+  {
+    "id": "511b95c333e3",
+    "t": "2026-10-25T15:13:33.691Z",
+    "role": "AI2",
+    "text": "{\"answers\":[\"extremely careful\",\"reading\",\"so that\"]}",
+    "kind": "student"
+  },
+  {
+    "id": "8460a3128fd6",
+    "t": "2026-10-25T15:13:34.205Z",
+    "role": "AI3",
+    "text": "{\"bugs\":[\"AI1 JSON truncated mid-string\",\"AI2 answers match AI1, contradicting previous log mismatch\",\"Log history inconsistent with current state\"],\"ideas\":[\"Enforce JSON length limits\",\"Add checksum validation\",\"Clarify log vs live data distinction\"]}",
+    "kind": "audit"
+  },
+  {
+    "id": "befe296acf88",
+    "t": "2026-10-25T15:14:17.961Z",
+    "role": "AI1",
+    "text": "{\"title\":\"English Practice: Gerunds & Vocab\",\"q\":[{\"t\":\"Match 'reluctant' with its meaning.\",\"type\":\"match\",\"opts\":[\"willing\",\"unwilling\",\"happy\"],\"ans\":\"unwilling\"},{\"t\":\"Fill in: I enjoy _______ to music.\",\"type\":\"blank\",\"opts\":[],\"ans\":\"listening\"},{\"t\":\"Choose the correct form: She studied hard _______ she could pass.\",\"type\":\"mcq\",\"opts\":[\"so that\",\"because\",\"although\"],\"ans\":\"so that\"}]}",
+    "kind": "teach"
+  },
+  {
+    "id": "6131f9592f53",
+    "t": "2026-10-25T15:14:18.234Z",
+    "role": "AI2",
+    "text": "{\"answers\":[\"unwilling\",\"listening\",\"so that\"]}",
+    "kind": "student"
+  },
+  {
+    "id": "501dbf1d56a3",
+    "t": "2026-10-25T15:14:18.541Z",
+    "role": "AI3",
+    "text": "{\"bugs\":[\"AI1 JSON truncated mid-string\",\"AI2 answers mismatch AI1 truncated data\",\"Log history inconsistent with current state\"],\"ideas\":[\"Enforce JSON length limits\",\"Add checksum validation\",\"Standardize error reporting\"]}",
+    "kind": "audit"
+  },
+  {
+    "id": "fed0caa6c0e7",
+    "t": "2026-10-25T15:15:03.182Z",
+    "role": "AI1",
+    "text": "{\"title\":\"English Practice: Gerunds & Vocab\",\"q\":[{\"t\":\"Match 'diligent' with its meaning.\",\"type\":\"match\",\"opts\":[\"hardworking\",\"lazy\",\"angry\"],\"ans\":\"hardworking\"},{\"t\":\"Fill in the blank: She enjoys _______ to music.\",\"type\":\"blank\",\"opts\":[],\"ans\":\"listening\"},{\"t\":\"Complete: He studied hard _______ he could pass.\",\"type\":\"mcq\",\"opts\":[\"so that\",\"because\",\"although\"],\"ans\":\"so that\"}]}",
+    "kind": "teach"
+  },
+  {
+    "id": "e019bc20481f",
+    "t": "2026-10-25T15:15:03.457Z",
+    "role": "AI2",
+    "text": "{\"answers\":[\"hardworking\",\"listening\",\"so that\"]}",
+    "kind": "student"
+  },
+  {
+    "id": "f335552df852",
+    "t": "2026-10-25T15:15:03.897Z",
+    "role": "AI3",
+    "text": "{\"bugs\":[\"AI1 JSON truncated mid-string\",\"AI2 answers mismatch AI1 truncated data\",\"Log history inconsistent with current state\"],\"ideas\":[\"Enforce JSON length limits\",\"Add checksum validation\"]}",
+    "kind": "audit"
+  },
+  {
+    "id": "b5fad20cc2bd",
+    "t": "2026-10-25T15:15:48.093Z",
+    "role": "AI1",
+    "text": "{\"title\":\"English Practice: Gerunds & Vocab\",\"q\":[{\"t\":\"Match 'diligent' with its meaning.\",\"type\":\"match\",\"opts\":[\"hardworking\",\"lazy\",\"angry\"],\"ans\":\"hardworking\"},{\"t\":\"Fill in the blank: He enjoys _______ chess.\",\"type\":\"blank\",\"opts\":[],\"ans\":\"playing\"},{\"t\":\"Complete: She studied hard _______ she could pass.\",\"type\":\"mcq\",\"opts\":[\"so that\",\"because\",\"although\"],\"ans\":\"so that\"}]}",
+    "kind": "teach"
+  },
+  {
+    "id": "54876ef2b28e",
+    "t": "2026-10-25T15:15:48.339Z",
+    "role": "AI2",
+    "text": "{\"answers\":[\"hardworking\",\"playing\",\"so that\"]}",
+    "kind": "student"
+  },
+  {
+    "id": "4f578a8c4c76",
+    "t": "2026-10-25T15:15:48.789Z",
+    "role": "AI3",
+    "text": "{\"bugs\":[\"AI1 JSON truncated mid-string\",\"AI2 answers mismatch AI1 truncated data\",\"Log history inconsistent with current state\"],\"ideas\":[\"Enforce JSON length limits\",\"Add checksums\"]}",
+    "kind": "audit"
+  },
+  {
+    "id": "af37a7201add",
+    "t": "2026-10-25T15:16:33.198Z",
+    "role": "AI1",
+    "text": "{\n  \"title\": \"English Practice: Gerunds & Vocab\",\n  \"q\": [\n    {\n      \"t\": \"Match 'diligent' with its meaning.\",\n      \"type\": \"match\",\n      \"opts\": [\"lazy\", \"hardworking\", \"angry\", \"quiet\"],\n      \"ans\": \"hardworking\"\n    },\n    {\n      \"t\": \"Fill in the blank: She enjoys _______ classical music.\",\n      \"type\": \"blank\",\n      \"opts\": [],\n      \"ans\": \"listening to\"\n    },\n    {\n      \"t\": \"Complete: He studied hard _______ he could pass the exam.\",\n      \"type\": \"open\",\n      \"opts\": [],\n      \"ans\": \"so that\"\n    }\n  ]\n}",
+    "kind": "teach"
+  },
+  {
+    "id": "1ada807e7a7e",
+    "t": "2026-10-25T15:16:33.498Z",
+    "role": "AI2",
+    "text": "{\"answers\":[\"hardworking\",\"listening to\",\"so that\"]}",
+    "kind": "student"
+  },
+  {
+    "id": "c675ea8c0efa",
+    "t": "2026-10-25T15:16:33.971Z",
+    "role": "AI3",
+    "text": "{\"bugs\":[\"AI1 JSON truncated mid-string\",\"AI2 answers mismatch AI1 truncated data\",\"Log history inconsistent with current state\"],\"ideas\":[\"Enforce JSON length limits\",\"Add checksums for integrity\",\"Standardize error handling\"]}",
+    "kind": "audit"
+  },
+  {
+    "id": "4c5ce8a8c35f",
+    "t": "2026-10-25T15:16:52.463Z",
+    "role": "SYS",
+    "text": "AI асаалаа 08:00–18:00"
   }
 ]

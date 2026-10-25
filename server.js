@@ -200,21 +200,36 @@ function inSchedule(st) {
   return hm >= a || hm <= b;
 }
 
+// Groq дээд түвшинд загварууд хулагддаг тул (жишээ: llama-3.1-8b-instant аль хэдийн алга)
+// нэг нь алдаа өгвөл дараагийн бэлэн загвар руу автоматаар шилжинэ.
+const GROQ_MODELS = ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b'];
+let groqModelIndex = 0;
+
 async function groqChat(which, messages, maxTok) {
   const s = secrets();
   const key = which === 2 ? s.groqKey2 : s.groqKey1;
   if (!key) throw new Error('GROQ key missing');
-  const r = await httpsJson('POST', 'https://api.groq.com/openai/v1/chat/completions', {
-    Authorization: 'Bearer ' + key
-  }, {
-    model: 'llama-3.1-8b-instant',
-    temperature: 0.3,
-    max_tokens: maxTok || 280,
-    messages
-  });
-  if (r.status >= 400) throw new Error((r.data && r.data.error && r.data.error.message) || ('Groq ' + r.status));
-  const msg = r.data && r.data.choices && r.data.choices[0] && r.data.choices[0].message;
-  return (msg && msg.content) || '';
+  let lastErr = null;
+  for (let attempt = 0; attempt < GROQ_MODELS.length; attempt++) {
+    const model = GROQ_MODELS[(groqModelIndex + attempt) % GROQ_MODELS.length];
+    const r = await httpsJson('POST', 'https://api.groq.com/openai/v1/chat/completions', {
+      Authorization: 'Bearer ' + key
+    }, {
+      model,
+      temperature: 0.3,
+      max_tokens: maxTok || 280,
+      messages
+    });
+    const msg = r.data && r.data.choices && r.data.choices[0] && r.data.choices[0].message;
+    if (r.status < 400 && msg && msg.content) {
+      groqModelIndex = (groqModelIndex + attempt) % GROQ_MODELS.length;
+      return msg.content;
+    }
+    lastErr = new Error((r.data && r.data.error && r.data.error.message) || ('Groq ' + r.status));
+    // model/параметр алдаа (404/400) бол дараагийн загварыг оролдоно; бусад (key/quota) алдаа бол зогсоно
+    if (r.status !== 404 && r.status !== 400) break;
+  }
+  throw lastErr || new Error('Groq алдаа');
 }
 
 async function sendReportEmail(toList, subject, message) {

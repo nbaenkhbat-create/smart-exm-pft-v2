@@ -14,7 +14,7 @@ async function ping(model) {
   console.log(text.slice(0, 800));
 }
 (async () => {
-  for (const m of ['qwen/qwen3.8-27b', 'meta-llama/llama-4-scout-17b-16e-instruct', 'llama-3.2-90b-vision-preview']) {
+  for (const m of ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b', 'openai/gpt-oss-20b']) {
     try { await ping(m); } catch (e) { console.log('ERR', m, e.message); }
   }
 })();
