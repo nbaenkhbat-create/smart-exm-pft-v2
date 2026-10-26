@@ -9411,7 +9411,12 @@ const seInSchedule = (st) => {
   return hm >= a || hm <= b;
 };
 
-const seCompactLogs = (n) => seChat().slice(-n).map((m) => m.role + ': ' + String(m.text).replace(/\s+/g, ' ').slice(0, 180)).join('\n');
+/* AI1/AI2-ийн түүхий текстийг хасна: тэдгээр AI3-д бүрэн хэлбэрээр тусгайлан илгээгддэг бөгөөд
+   энд 180 тэмдэгтээр тасдагдаж хувирах тул AI3 "JSON тасдагдсан" гэж буруу дүгнэдэг байв. */
+const seCompactLogs = (n) => seChat()
+  .filter((m) => m.role !== 'AI1' && m.role !== 'AI2')
+  .slice(-n)
+  .map((m) => m.role + ': ' + String(m.text).replace(/\s+/g, ' ').slice(0, 180)).join('\n');
 
 let seSecretsCache = null;
 const seSecrets = async () => {
@@ -9565,6 +9570,23 @@ const seAiPublishWork = (exam, sub) => {
     } catch (e) { console.warn('seAiPublishWork subs', e && e.message); }
   }
   try { window.dispatchEvent(new CustomEvent('se_ai_work', { detail: { examId: exam ? exam.id : '' } })); } catch {}
+};
+
+/* Сервер горимын симуляцийн ажлыг (server.js data/sim-workspace.json) энэ төхөөрөмжийн
+   «Шалгалт» / «Үр дүн» рүү шилжүүлнэ — симуляцийн багш аккаунтаар нэвтрээд шууд харна. */
+let seSimPublishedId = '';
+const seAiPublishFromSim = (sim) => {
+  try {
+    const list = (sim && sim.exams) || [];
+    const last = list[list.length - 1];
+    if (!last || !last.q || seSimPublishedId === last.id) return;
+    const exam = seAiBuildExam(last, last.owner || 'sim');
+    if (!exam) return;
+    const work = ((sim.studentWork || []).slice().reverse()).find((w) => w && w.examId === last.id);
+    const sub = work ? seAiBuildSubmission(exam, work.a2) : null;
+    seAiPublishWork(exam, sub);
+    seSimPublishedId = last.id;
+  } catch (e) { console.warn('seAiPublishFromSim', e && e.message); }
 };
 
 /* AI1–AI4 ажилтнууд: server.js байхгүй үед (GitHub Pages) хуудас нээлттэй байхад браузер дээр ажиллана */
@@ -9761,6 +9783,7 @@ function AdminApp() {
     setTeachers(t.teachers || []);
     const a = await adminApi('/api/admin/ai/state');
     setAi(a);
+    if (a && a.sim) seAiPublishFromSim(a.sim);
     if (a.state && a.state.extraEmail != null) setMailTo(a.state.extraEmail);
     if (a.state && a.state.simLogin != null) setSimLogin(a.state.simLogin);
   };

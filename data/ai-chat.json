@@ -1,44 +1,5 @@
 [
   {
-    "id": "2005a2d2853a",
-    "t": "2026-10-22T19:19:06.196Z",
-    "role": "SYS",
-    "text": "AI асаалаа 08:00–18:00"
-  },
-  {
-    "id": "10c0a54a779f",
-    "t": "2026-10-22T19:19:06.866Z",
-    "role": "SYS",
-    "text": "AI унтраалаа"
-  },
-  {
-    "id": "e9d2b831c48e",
-    "t": "2026-10-25T15:08:27.720Z",
-    "role": "SYS",
-    "text": "AI асаалаа 00:00–23:59"
-  },
-  {
-    "id": "3e3c6d687751",
-    "t": "2026-10-25T15:08:41.639Z",
-    "role": "SYS",
-    "text": "AI алдаа: 'model' : property 'model' is missing",
-    "kind": "error"
-  },
-  {
-    "id": "02d4bdbdf697",
-    "t": "2026-10-25T15:09:26.650Z",
-    "role": "SYS",
-    "text": "AI алдаа: 'model' : property 'model' is missing",
-    "kind": "error"
-  },
-  {
-    "id": "4a3f0416a870",
-    "t": "2026-10-25T15:10:11.394Z",
-    "role": "SYS",
-    "text": "AI алдаа: 'model' : property 'model' is missing",
-    "kind": "error"
-  },
-  {
     "id": "5a1dff44e531",
     "t": "2026-10-25T15:11:17.868Z",
     "role": "AI1",
@@ -219,11 +180,5 @@
     "role": "AI3",
     "text": "{\"bugs\":[\"AI1 JSON truncated mid-string\",\"AI2 answers mismatch AI1 truncated data\",\"Log history inconsistent with current state\"],\"ideas\":[\"Enforce JSON length limits\",\"Add checksums for integrity\",\"Standardize error handling\"]}",
     "kind": "audit"
-  },
-  {
-    "id": "4c5ce8a8c35f",
-    "t": "2026-10-25T15:16:52.463Z",
-    "role": "SYS",
-    "text": "AI асаалаа 08:00–18:00"
   }
 ]

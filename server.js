@@ -205,29 +205,47 @@ function inSchedule(st) {
 const GROQ_MODELS = ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b'];
 let groqModelIndex = 0;
 
+/* data/secrets.json дахь түлхүүрүүд хүчингүй болоход (401) зогсохгүйн тулд
+   хуудас дээр ашиглагддаж буй ажиллагаатай түлхүүрийг нөөцөөр авна. */
+let pageKeyCache = null;
+function pageGroqKey() {
+  if (pageKeyCache) return pageKeyCache;
+  try {
+    const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+    const line = String(html).split('\n').find((l) => l.indexOf('const SCAN_GROQ_KEY = ') === 0);
+    if (line) pageKeyCache = Function(line.replace('const SCAN_GROQ_KEY = ', 'return '))();
+  } catch (e) { console.warn('page key decode:', e.message); }
+  return pageKeyCache || '';
+}
+
 async function groqChat(which, messages, maxTok) {
   const s = secrets();
-  const key = which === 2 ? s.groqKey2 : s.groqKey1;
-  if (!key) throw new Error('GROQ key missing');
+  const primary = which === 2 ? s.groqKey2 : s.groqKey1;
+  const secondary = which === 2 ? s.groqKey1 : s.groqKey2;
+  const keys = Array.from(new Set([primary, secondary, pageGroqKey()].filter(Boolean)));
+  if (!keys.length) throw new Error('GROQ key missing');
   let lastErr = null;
-  for (let attempt = 0; attempt < GROQ_MODELS.length; attempt++) {
-    const model = GROQ_MODELS[(groqModelIndex + attempt) % GROQ_MODELS.length];
-    const r = await httpsJson('POST', 'https://api.groq.com/openai/v1/chat/completions', {
-      Authorization: 'Bearer ' + key
-    }, {
-      model,
-      temperature: 0.3,
-      max_tokens: maxTok || 280,
-      messages
-    });
-    const msg = r.data && r.data.choices && r.data.choices[0] && r.data.choices[0].message;
-    if (r.status < 400 && msg && msg.content) {
-      groqModelIndex = (groqModelIndex + attempt) % GROQ_MODELS.length;
-      return msg.content;
+  for (let ki = 0; ki < keys.length; ki++) {
+    for (let attempt = 0; attempt < GROQ_MODELS.length; attempt++) {
+      const model = GROQ_MODELS[(groqModelIndex + attempt) % GROQ_MODELS.length];
+      const r = await httpsJson('POST', 'https://api.groq.com/openai/v1/chat/completions', {
+        Authorization: 'Bearer ' + keys[ki]
+      }, {
+        model,
+        temperature: 0.3,
+        max_tokens: maxTok || 280,
+        messages
+      });
+      const msg = r.data && r.data.choices && r.data.choices[0] && r.data.choices[0].message;
+      if (r.status < 400 && msg && msg.content) {
+        groqModelIndex = (groqModelIndex + attempt) % GROQ_MODELS.length;
+        return msg.content;
+      }
+      lastErr = new Error((r.data && r.data.error && r.data.error.message) || ('Groq ' + r.status));
+      // 401/403 → түлхүүр солих; 404/400 → загвар солих; бусад → дараагийн түлхүүр рүү
+      if (r.status === 401 || r.status === 403) break;
+      if (r.status !== 404 && r.status !== 400) break;
     }
-    lastErr = new Error((r.data && r.data.error && r.data.error.message) || ('Groq ' + r.status));
-    // model/параметр алдаа (404/400) бол дараагийн загварыг оролдоно; бусад (key/quota) алдаа бол зогсоно
-    if (r.status !== 404 && r.status !== 400) break;
   }
   throw lastErr || new Error('Groq алдаа');
 }
@@ -257,7 +275,12 @@ async function sendReportEmail(toList, subject, message) {
 }
 
 function compactLogs(n) {
-  return chatLog().slice(-n).map((m) => m.role + ': ' + String(m.text).replace(/\s+/g, ' ').slice(0, 180)).join('\n');
+  // AI1/AI2-ийн түүхий текстийг хасна: тэдгээр нь AI3-д бүрэн хэлбэрээр тусгайлан илгээгддэг бөгөөд
+  // энд 180 тэмдэгтээр тасдагдаж хувирах тул AI3 "JSON тасдагдсан" гэж буруу дүгнэдэг байв.
+  return chatLog()
+    .filter((m) => m.role !== 'AI1' && m.role !== 'AI2')
+    .slice(-n)
+    .map((m) => m.role + ': ' + String(m.text).replace(/\s+/g, ' ').slice(0, 180)).join('\n');
 }
 
 async function workerTick() {
@@ -287,9 +310,9 @@ async function workerTick() {
     const lastExam = exams[exams.length - 1];
 
     const a1 = await groqChat(1, [
-      { role: 'system', content: sys + ' You are AI1 Teacher. Output JSON only: {"title":"","q":[{"t":"","type":"mcq|blank|match|open","opts":[],"ans":""}]} 2-3 questions, English grade 11 style.' },
-      { role: 'user', content: 'Make a tiny practice set. Topic rotate: vocab match / gerund / so that.' }
-    ], 320);
+      { role: 'system', content: 'You are AI1, an English teacher. Output ONLY one complete ASCII-JSON object: no markdown, no commentary, no Cyrillic, plain English text only. Shape: {"title":"...","q":[{"t":"question text","type":"mcq","opts":["a","b","c","d"],"ans":"exact option text"}]}. Use type mcq (4 opts) or blank (opts:[]). Exactly 5 questions. Every JSON string and bracket must be closed.' },
+      { role: 'user', content: 'Make a 5-question English practice set. Rotate topic: vocabulary / gerunds / so that / tenses.' }
+    ], 700);
     pushChat('AI1', a1, { kind: 'teach' });
     let exam = null;
     try {
@@ -302,9 +325,9 @@ async function workerTick() {
     ws.exams = (ws.exams || []).slice(-20).concat([exam]);
 
     const a2 = await groqChat(1, [
-      { role: 'system', content: sys + ' You are AI2 Student. Answer the quiz briefly as JSON {"answers":[]}' },
-      { role: 'user', content: JSON.stringify(exam).slice(0, 900) }
-    ], 200);
+      { role: 'system', content: 'You are AI2, a student. Reply ONLY with a complete ASCII-JSON object {"answers":[...]} — one answer per question, in order, matching each option text exactly. No markdown, no Cyrillic, no extra text.' },
+      { role: 'user', content: JSON.stringify({ title: exam.title, q: (exam.q || []).map((q) => ({ t: q.t, type: q.type, opts: q.opts })) }).slice(0, 1600) }
+    ], 400);
     pushChat('AI2', a2, { kind: 'student' });
     ws.studentWork = (ws.studentWork || []).slice(-20).concat([{ examId: exam.id, a2, at: exam.at }]);
 
@@ -428,19 +451,25 @@ async function handleApi(req, res, url) {
 
   if (p === '/api/admin/ai/state' && req.method === 'GET') {
     const st = aiState();
-    return json(res, 200, { ok: true, state: st, inSchedule: inSchedule(st), chat: chatLog().slice(-80), sim: simWs() });
+    // AI1/AI2-ын түүхий ажиллагааг админд үзүүлэхгүй (зөвхөн үр дүн нь тест/дүнгээр гарна)
+    const shown = chatLog().filter((m) => m.role !== 'AI1' && m.role !== 'AI2');
+    return json(res, 200, { ok: true, state: st, inSchedule: inSchedule(st), chat: shown.slice(-80), sim: simWs() });
   }
 
   if (p === '/api/admin/ai/state' && req.method === 'POST') {
     const body = await readBody(req);
     const st = aiState();
+    const wasOn = !!st.enabled;
     if (typeof body.enabled === 'boolean') st.enabled = body.enabled;
     if (body.start) st.start = String(body.start).slice(0, 5);
     if (body.end) st.end = String(body.end).slice(0, 5);
     if (body.extraEmail != null) st.extraEmail = String(body.extraEmail).trim();
     if (body.simLogin != null) st.simLogin = String(body.simLogin).trim();
     writeJson(FILES.ai, st);
-    pushChat('SYS', st.enabled ? ('AI асаалаа ' + st.start + '–' + st.end) : 'AI унтраалаа');
+    // Зөвхөн ON/OFF өөрчлөгдсөн үед л мэдэгдэл нэмнэ (ажил цаг/имэйл/нэр солих бүрт давтаж байсан)
+    if (typeof body.enabled === 'boolean' && !!st.enabled !== wasOn) {
+      pushChat('SYS', st.enabled ? ('AI асаалаа ' + st.start + '–' + st.end) : 'AI унтраалаа');
+    }
     return json(res, 200, { ok: true, state: st });
   }
 
