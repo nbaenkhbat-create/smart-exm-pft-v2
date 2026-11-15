@@ -10177,15 +10177,26 @@ async function seStaticApi(path, opts) {
     if (!login || password.length < 6) throw err('Нэвтрэх нэр болон 6+ нууц үг хэрэгтэй');
     const email = login.includes('@') ? login.toLowerCase() : login.replace(/[^a-z0-9._-]/gi, '').toLowerCase() + '@smartexam.app';
     let uid = '';
+    let reclaimed = false;
     try {
       const cred = await teacherSignUp(login, password, name);
       uid = (cred && cred.uid) || '';
-    } catch (e) { throw err((e && e.message) || 'Бүртгэл үүсгэсэнгүй'); }
+    } catch (e) {
+      const code = (e && e.code) || '';
+      if (code !== 'auth/email-already-in-use') throw err((e && e.message) || 'Бүртгэл үүсгэсэнгүй');
+      // Firebase-д хуучин аккаунт устгагдалгүй үлдсэн. Ижил нууц үгээр нэвтэрч чадвал түүнийг дахин ашиглана.
+      let auth = null;
+      try { auth = await seFbAuth('signInWithPassword', { email: email, password: password, returnSecureToken: true }); } catch (_) { auth = null; }
+      if (!auth) throw err('Энэ нэр Firebase-д бүртгэлтэй байна (устгагдаагүй), гэхдээ нууц үг таарахгүй тул дахин ашиглаж чадсангүй. Firebase Console → Authentication-оос хуучин аккаунтыг устгана уу.');
+      uid = auth.localId || '';
+      reclaimed = true;
+      try { await seFbAuth('update', { idToken: auth.idToken, displayName: name }); } catch (_) {}
+    }
     const list = SE_LS.get('se_static_teachers', []);
     // Нууц үгийг браузер/файлд ХАДГАЛАХГҮЙ — устгах, солиход админ одоогийн нууц үгийг бичнэ.
     list.push({ login: login, email: email, name: name, uid: uid, createdAt: new Date().toISOString() });
     SE_LS.set('se_static_teachers', list);
-    return { ok: true, email: email, uid: uid, staticMode: true };
+    return { ok: true, email: email, uid: uid, reclaimed: reclaimed, staticMode: true };
   }
   if (path === '/api/admin/teachers/update' && method === 'POST') {
     if (!(await seCheckPassword(String(body.adminPassword || '')))) throw err('Админы нууц үг буруу', 400);
@@ -10346,7 +10357,7 @@ function AdminApp() {
       await load();
       alert(r && r.firebaseDeleted
         ? 'Устгалаа (Firebase Auth аккаунт ч хамт устлаа).'
-        : 'Жагсаалтаас устгалаа. Багшийн нууц үг мэдэгдэхгүй тул Firebase Auth аккаунт нь хэвээр үлдлээ — Firebase Console → Authentication-оос гар аргаар устгаж болно.');
+        : 'Жагсаалтаас устгалаа. Багшийн нууц үг мэдэгдэхгүй тул Firebase Auth аккаунт нь хэвээр үлдлээ. Дахин үүсгэхэд ижил нууц үг таарвал тэр аккаунтыг автоматаар дахин ашиглана (Firebase Console → Authentication-оос гар аргаар устгаж болно).');
     } catch (e) {
       patchEdit({ busy: false, msg: (e && e.message) || 'Алдаа' });
     }
@@ -10368,10 +10379,13 @@ function AdminApp() {
           <input className="form-input" placeholder="Нэр" value={form.name} onChange={e => setForm({...form, name:e.target.value})} />
           <button className="btn btn-primary" onClick={async () => {
             try {
-              await adminApi('/api/admin/teachers', { method: 'POST', body: JSON.stringify(form) });
+              const made = await adminApi('/api/admin/teachers', { method: 'POST', body: JSON.stringify(form) });
+              const wasReclaim = !!(made && made.reclaimed);
               setForm({ login:'', password:'', name:'' });
               await load();
-              alert('Багш үүслээ. Тэр нэр/нууц үгээр шууд нэвтэрнэ.');
+              alert(wasReclaim
+                ? ('«' + form.login + '» нэр Firebase-д байсан тул тэр хуучин аккаунтыг дахин ашиглалаа. Одоо ' + form.login + ' / шинэ нууц үгээр нэвтэрнэ.')
+                : 'Багш үүслээ. Тэр нэр/нууц үгээр шууд нэвтэрнэ.');
             } catch (e) { alert(e.message); }
           }}>Үүсгэх</button>
         </div>

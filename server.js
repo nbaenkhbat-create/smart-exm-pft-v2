@@ -203,17 +203,32 @@ async function handleApi(req, res, url) {
     const email = teacherEmail(login);
     const s = secrets();
     let uid = '';
+    let reclaimed = false;
     try {
+      let idToken = '';
       const r = await httpsJson('POST',
         'https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=' + encodeURIComponent(s.firebaseApiKey),
         {},
         { email, password, returnSecureToken: true });
       if (r.status >= 400) {
         const msg = (r.data && r.data.error && r.data.error.message) || JSON.stringify(r.data);
-        return json(res, 400, { ok: false, error: msg });
+        if (!/EMAIL_EXISTS/i.test(msg)) return json(res, 400, { ok: false, error: msg });
+        // Firebase-д хуучин аккаунт устгагдалгүй үлдсэн байна. Ижил нууц үгээр нэвтэрч чадвал
+        // тэр аккаунтыг дахин ашиглана (устгасан багшийг дахин үүсгэх боломжтой болно).
+        const si = await httpsJson('POST',
+          'https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=' + encodeURIComponent(s.firebaseApiKey),
+          {},
+          { email, password, returnSecureToken: true });
+        if (si.status >= 400) {
+          return json(res, 400, { ok: false, error: 'Энэ нэр Firebase-д бүртгэлтэй байна (устгагдаагүй), гэхдээ нууц үг таарахгүй тул дахин ашиглаж чадсангүй. Firebase Console → Authentication-оос хуучин аккаунтыг устгана уу.' });
+        }
+        uid = si.data.localId;
+        idToken = si.data.idToken;
+        reclaimed = true;
+      } else {
+        uid = r.data.localId;
+        idToken = r.data.idToken;
       }
-      uid = r.data.localId;
-      const idToken = r.data.idToken;
       await httpsJson('POST',
         'https://identitytoolkit.googleapis.com/v1/accounts:update?key=' + encodeURIComponent(s.firebaseApiKey),
         {},
@@ -231,7 +246,7 @@ async function handleApi(req, res, url) {
     // Нууц үгийг сервер файлд ХАДГАЛАХГҮЙ — устгах/солиход админ одоогийн нууц үгийг бичнэ.
     list.push({ login, email, name, uid, createdAt: new Date().toISOString() });
     writeJson(FILES.teachers, list);
-    return json(res, 200, { ok: true, email, uid });
+    return json(res, 200, { ok: true, email, uid, reclaimed });
   }
 
   if (p === '/api/admin/teachers/update' && req.method === 'POST') {
