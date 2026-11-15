@@ -9032,6 +9032,13 @@ function StudentHome({ name, onStart, onLogout }) {
     try {
       const room = await fetchExamRoomByCode(t.roomId);
       if (room.stopped) throw new Error('Энэ тестийг багш зогсоосон байна.');
+      // Багш хаасан эсвэл нэвтрэх хугацаа дууссан бол оруулахгүй
+      if (t.state === 'closed') throw new Error('Багш энэ ' + (t.kind === 'practice' ? 'дасгалыг' : 'шалгалтыг') + ' хаасан байна. Багшаас нээхийг хүсээрэй.');
+      const entryMin = Number(t.entryMinutes) || 0;
+      if (entryMin > 0 && t.openedAt) {
+        const deadline = new Date(t.openedAt).getTime() + entryMin * 60000;
+        if (Date.now() > deadline) throw new Error('Нэвтрэх хугацаа (' + entryMin + ' мин) дууссан байна. Багшаас дахин нээхийг хүсээрэй.');
+      }
       const isExamKind = t.kind !== 'practice';
       const doneFull = sortedAttempts(att[t.roomId]).filter(a => a.mode !== 'mistakes').length;
       let st0 = selSet;
@@ -9206,7 +9213,7 @@ function ClassesPage({ exams, onBack }) {
   const [assignKind, setAssignKind] = useState('exam');
   const [pick, setPick] = useState({ exam: '' });
   const [info, setInfo] = useState(null); // exam id
-  const [resFor, setResFor] = useState(null); // exam id
+  const [resFor, setResFor] = useState(null); // { rid, minutes } — шалгалт удирдах цонх
   const uidv = getAuth()?.currentUser?.uid;
   const backfilledRef = useRef('');
 
@@ -9359,14 +9366,47 @@ function ClassesPage({ exams, onBack }) {
     setRenameFor(null);
   };
 
-  const savePassword = async () => {
+  const saveCreds = async () => {
     const db = getDb(); if (!db || !cur || !pwFor) return;
+    const me = members[pwFor.sid] || {};
+    const login = String(pwFor.login || '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
     const pass = String(pwFor.pass || '');
-    if (pass.length < 6) { alert('Нууц үг 6+ тэмдэгт байх ёстой'); return; }
-    const h = await seSha256('se-stu:' + pwFor.sid + ':' + pass);
-    await db.ref('classMembers/' + cur + '/' + pwFor.sid).update({ passHash: h, passSetAt: new Date().toISOString() });
+    const taken = mIds.filter(x => x !== pwFor.sid).map(x => String((members[x] || {}).login || '').toLowerCase()).filter(Boolean);
+    if (login && taken.indexOf(login) >= 0) { alert('«' + login + '» нэвтрэх нэр аль хэдийн байна. Өөр нэр сонгоно уу.'); return; }
+    if (pass && pass.length < 6) { alert('Нууц үг 6+ тэмдэгт байх ёстой'); return; }
+    const patch = {};
+    if (login && login !== String(me.login || '').toLowerCase()) patch.login = login;
+    if (pass) { patch.passHash = await seSha256('se-stu:' + pwFor.sid + ':' + pass); patch.passSetAt = new Date().toISOString(); }
+    if (!Object.keys(patch).length) { setPwFor(null); return; }
+    await db.ref('classMembers/' + cur + '/' + pwFor.sid).update(patch);
     setPwFor(null);
-    alert('Нууц үг хадгалагдлаа.');
+    alert('Хадгалагдлаа · ' + (me.name || '') + (patch.login ? ' · нэвтрэх нэр: ' + patch.login : '') + (patch.passHash ? ' · нууц үг шинэчлэгдлээ' : ''));
+  };
+
+  /* ── Шалгалт/дасгал удирдах: нээх, хаах, нэвтрэх хугацаа ── */
+  const openRes = (rid) => {
+    const a = (c?.assignments || {})[rid] || {};
+    setResFor({ rid, minutes: a.entryMinutes != null ? String(a.entryMinutes) : '0', busy: false });
+  };
+  const patchRes = (p) => setResFor(s => (s ? Object.assign({}, s, p) : s));
+  const resMinutes = () => Math.max(0, Math.min(600, Math.round(Number(resFor && resFor.minutes) || 0)));
+  const saveEntryMinutes = async () => {
+    const db = getDb(); if (!db || !cur || !resFor) return;
+    const mins = resMinutes();
+    await db.ref('classes/' + cur + '/assignments/' + resFor.rid).update({ entryMinutes: mins });
+    patchRes({ minutes: String(mins) });
+  };
+  const restartAssign = async () => {
+    const db = getDb(); if (!db || !cur || !resFor) return;
+    const mins = resMinutes();
+    await db.ref('classes/' + cur + '/assignments/' + resFor.rid).update({ state: 'open', openedAt: new Date().toISOString(), entryMinutes: mins });
+    patchRes({ minutes: String(mins) });
+    alert('Дахин эхэллээ' + (mins > 0 ? ' · сурагчид одоогоос ' + mins + ' минутын дотроос нэвтэрнэ.' : ' · нэвтрэх хугацааны хязгааргүй.'));
+  };
+  const closeAssign = async () => {
+    const db = getDb(); if (!db || !cur || !resFor) return;
+    await db.ref('classes/' + cur + '/assignments/' + resFor.rid).update({ state: 'closed' });
+    alert('Хаагдлаа · сурагчид шинээр нэвтрэх боломжгүй.');
   };
 
   const openBulk = () => {
@@ -9388,7 +9428,7 @@ function ClassesPage({ exams, onBack }) {
   const doAssign = async () => {
     const ex = exams.find(e => e.id === pick.exam); if (!ex) return;
     try {
-      await getDb().ref('classes/' + cur + '/assignments/' + ex.id).set({ title: ex.title, kind: assignKind, at: new Date().toISOString() });
+      await getDb().ref('classes/' + cur + '/assignments/' + ex.id).set({ title: ex.title, kind: assignKind, at: new Date().toISOString(), state: 'open', openedAt: new Date().toISOString(), entryMinutes: 0 });
       setAssignOpen(false); setPick({ exam: '' });
     } catch (e) { alert('Оноож чадсангүй: ' + (e?.message || e)); }
   };
@@ -9555,8 +9595,8 @@ function ClassesPage({ exams, onBack }) {
                       <td style={{ fontSize: '.82rem' }}>{m.login || '—'}</td>
                       <td>
                         <RowMenu items={[
-                          { label: '⚙ Засах', onClick: () => setRenameFor({ sid, name: m.name || '' }) },
-                          { label: '🔒 Нууц үг солих', onClick: () => setPwFor({ sid, pass: '' }) },
+                          { label: '⚙ Нэр засах', onClick: () => setRenameFor({ sid, name: m.name || '' }) },
+                          { label: '🔑 Нэвтрэх нэр / нууц үг', onClick: () => setPwFor({ sid, login: m.login || '', pass: '' }) },
                           { label: '📊 Үр дүн харах', onClick: () => setDetail(sid) },
                           { label: '🗑 Устгах', onClick: () => setDelAsk({ type: 'students', ids: [sid], text: '' }) }
                         ]} />
@@ -9568,7 +9608,7 @@ function ClassesPage({ exams, onBack }) {
             )}
 
             {(tab === 'exams' || tab === 'practice') && (() => {
-              const kind = tab;
+              const kind = tab === 'exams' ? 'exam' : 'practice';
               const list = allTests.filter(([rid]) => kindOf(rid) === kind)
                 .filter(([rid, t]) => !q.trim() || String(t.title || '').toLowerCase().includes(q.toLowerCase()));
               const per = 20;
@@ -9598,14 +9638,20 @@ function ClassesPage({ exams, onBack }) {
                       const avg = vals.length ? Math.round(vals.reduce((s, x) => s + x.val, 0) / vals.length) : null;
                       return (<tr key={rid}>
                         <td><input type="checkbox" checked={!!sel[rid]} onChange={e => setSel(s => ({ ...s, [rid]: e.target.checked }))} /></td>
-                        <td style={{ fontWeight: 600 }}>📄 {t.title || ex.title || 'Тест'}</td>
+                        <td style={{ fontWeight: 600 }}>
+                          <a style={{ cursor: 'pointer', color: 'var(--primary)' }} onClick={() => openRes(rid)}>📄 {t.title || ex.title || 'Тест'}</a>
+                          {t.state === 'closed'
+                            ? <span className="badge" style={{ marginLeft: 6, background: '#fee2e2', color: '#b91c1c' }}>Хаалттай</span>
+                            : <span className="badge" style={{ marginLeft: 6, background: '#dcfce7', color: '#166534' }}>Нээлттэй</span>}
+                        </td>
                         <td>{ex.subject || '—'}</td>
                         <td>{vals.length} / {mIds.length}</td>
                         <td><b>{avg != null ? avg + '%' : '—'}</b></td>
                         <td>{seShortDur(ex.duration)}</td>
                         <td>
                           <RowMenu items={[
-                            { label: '📊 Үр дүн харах', onClick: () => setResFor(rid) },
+                            { label: '📊 Үр дүн / удирдах', onClick: () => openRes(rid) },
+                            { label: '🔄 Дахин эхлүүлэх', onClick: () => openRes(rid) },
                             { label: 'ℹ Мэдээлэл', onClick: () => setInfo(rid) },
                             { label: '🗑 Устгах', onClick: () => setDelAsk({ type: 'assign', rid, title: t.title, text: '' }) }
                           ]} />
@@ -9735,20 +9781,27 @@ function ClassesPage({ exams, onBack }) {
 
       {pwFor && (
         <div className="modal-overlay" style={{ zIndex: 500 }}>
-          <div className="modal" style={{ maxWidth: 400 }}>
-            <div className="modal-head"><div style={{ fontFamily: 'Outfit', fontWeight: 800 }}>Нууц үг солих · {(members[pwFor.sid] || {}).name || ''}</div></div>
+          <div className="modal" style={{ maxWidth: 420 }}>
+            <div className="modal-head"><div style={{ fontFamily: 'Outfit', fontWeight: 800 }}>🔑 Нэвтрэх нэр / нууц үг · {(members[pwFor.sid] || {}).name || ''}</div></div>
             <div className="modal-body">
               <div className="form-group">
-                <label className="form-label">Шинэ нууц үг (6+)</label>
-                <input className="form-input" type="text" autoFocus value={pwFor.pass}
-                  onChange={e => setPwFor(p => (p ? { ...p, pass: e.target.value } : p))}
-                  onKeyDown={e => { if (e.key === 'Enter') savePassword(); }} />
+                <label className="form-label">Нэвтрэх нэр</label>
+                <input className="form-input" autoFocus value={pwFor.login}
+                  placeholder="жнь: bbatbayar"
+                  onChange={e => setPwFor(p => (p ? { ...p, login: e.target.value } : p))}
+                  onKeyDown={e => { if (e.key === 'Enter') saveCreds(); }} />
               </div>
-              <div className="form-hint">Зөвхөн шифрлэсэн хэлбэрээр (SHA-256 hash) хадгалагдана.</div>
+              <div className="form-group">
+                <label className="form-label">Шинэ нууц үг (6+ тэмдэгт)</label>
+                <input className="form-input" type="text" value={pwFor.pass} placeholder="хоосон үлдээвэл нууц үг өөрчлөгдөхгүй"
+                  onChange={e => setPwFor(p => (p ? { ...p, pass: e.target.value } : p))}
+                  onKeyDown={e => { if (e.key === 'Enter') saveCreds(); }} />
+              </div>
+              <div className="form-hint">Нэвтрэх нэр ангийн дотор давтагдахгүй байх ёстой. Нууц үг зөвхөн шифрлэсэн хэлбэрээр (SHA-256 hash) хадгалагдана.</div>
             </div>
             <div className="modal-foot" style={{ gap: 8 }}>
               <button className="btn btn-outline" onClick={() => setPwFor(null)}>Болих</button>
-              <button className="btn btn-primary" onClick={savePassword}>💾 Хадгалах</button>
+              <button className="btn btn-primary" onClick={saveCreds}>💾 Хадгалах</button>
             </div>
           </div>
         </div>
@@ -9810,25 +9863,61 @@ function ClassesPage({ exams, onBack }) {
       })()}
 
       {resFor && (() => {
-        const ex = exams.find(e => e.id === resFor) || {};
-        const t = (c?.assignments || {})[resFor] || {};
-        const rows = mIds.map(sid => ({ sid, name: (members[sid] || {}).name || '—', x: cell(resFor, sid) }));
+        const rid = resFor.rid;
+        const ex = exams.find(e => e.id === rid) || {};
+        const t = (c?.assignments || {})[rid] || {};
+        const kindLbl = t.kind === 'practice' ? 'дасгал' : 'шалгалт';
+        const isOpen = t.state !== 'closed';
+        const mins = Number(t.entryMinutes) || 0;
+        const openedAt = t.openedAt ? new Date(t.openedAt).getTime() : 0;
+        const leftMin = isOpen && mins > 0 && openedAt ? Math.ceil((openedAt + mins * 60000 - Date.now()) / 60000) : null;
+        const did = mIds.map(sid => ({ sid, name: (members[sid] || {}).name || '—', id: (members[sid] || {}).studentId || '—', x: cell(rid, sid) }))
+          .filter(r => r.x).sort((a, b) => b.x.val - a.x.val);
         return (
-          <div className="modal-overlay" style={{ zIndex: 500 }} onClick={e => e.target === e.currentTarget && setResFor(null)}>
-            <div className="modal" style={{ maxWidth: 560 }}>
-              <div className="modal-head"><div style={{ fontFamily: 'Outfit', fontWeight: 800 }}>📊 {t.title || ex.title || 'Тест'} · үр дүн</div></div>
-              <div className="modal-body" style={{ maxHeight: '60vh', overflowY: 'auto' }}>
-                <table className="tbl"><thead><tr><th>Сурагч</th><th>ID</th><th>Дүн</th><th>Оролдлого</th><th></th></tr></thead><tbody>
-                  {rows.map(r => (
-                    <tr key={r.sid}>
-                      <td>{r.name}</td>
-                      <td style={{ fontSize: '.78rem', color: 'var(--text2)' }}>{(members[r.sid] || {}).studentId || '—'}</td>
-                      <td><b>{r.x ? r.x.val + '%' : '—'}</b></td>
-                      <td>{r.x ? r.x.n + '×' : '—'}</td>
-                      <td>{r.x ? <button className="btn btn-outline btn-sm" onClick={() => { setResFor(null); setDetail(r.sid); }}>Дэлгэрэнгүй</button> : null}</td>
-                    </tr>
-                  ))}
-                </tbody></table>
+          <div className="modal-overlay" style={{ zIndex: 600 }} onClick={e => e.target === e.currentTarget && setResFor(null)}>
+            <div className="modal" style={{ maxWidth: 620 }}>
+              <div className="modal-head">
+                <div style={{ fontFamily: 'Outfit', fontWeight: 800 }}>📊 {t.title || ex.title || 'Тест'}</div>
+                <div style={{ fontSize: '.78rem', color: 'var(--text2)' }}>{kindLbl} · {c?.name} · {did.length} сурагч өгсөн</div>
+              </div>
+              <div className="modal-body" style={{ maxHeight: '62vh', overflowY: 'auto' }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', background: 'var(--surface2)', borderRadius: 10, padding: '10px 12px', marginBottom: 12 }}>
+                  <span className="badge" style={{ background: isOpen ? '#dcfce7' : '#fee2e2', color: isOpen ? '#166534' : '#b91c1c' }}>{isOpen ? '● Нээлттэй' : '● Хаалттай'}</span>
+                  <span style={{ fontSize: '.8rem', color: 'var(--text2)' }}>
+                    {isOpen
+                      ? (mins > 0
+                        ? 'Нэвтрэх хугацаа: ' + mins + ' мин · ' + (leftMin > 0 ? 'үлдсэн ' + leftMin + ' мин' : 'хугацаа дууссан')
+                        : 'Нэвтрэх хугацааны хязгааргүй')
+                      : 'Сурагчид шинээр нэвтрэх боломжгүй'}
+                  </span>
+                  <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <input className="form-input" style={{ width: 72 }} type="number" min="0" max="600" value={resFor.minutes}
+                      onChange={e => patchRes({ minutes: e.target.value })} title="Нэвтрэх хугацаа (минут)" />
+                    <span style={{ fontSize: '.78rem', color: 'var(--text2)' }}>мин</span>
+                    <button className="btn btn-outline btn-sm" onClick={saveEntryMinutes}>💾</button>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+                  <button className="btn btn-primary btn-sm" onClick={restartAssign}>🔄 Дахин эхлүүлэх</button>
+                  <button className="btn btn-red btn-sm" disabled={!isOpen} onClick={closeAssign}>⛔ Хаах</button>
+                  {mIds.length - did.length > 0 && <span style={{ fontSize: '.78rem', color: 'var(--text2)', alignSelf: 'center' }}>Өгөөгүй: {mIds.length - did.length}</span>}
+                </div>
+                {!did.length ? (
+                  <div style={{ color: 'var(--text3)', fontSize: '.85rem' }}>Одоогоор хэн ч энэ {kindLbl}ыг өгөөгүй байна.</div>
+                ) : (
+                  <table className="tbl"><thead><tr><th>№</th><th>Сурагч</th><th>ID</th><th>Дүн</th><th>Оролдлого</th><th></th></tr></thead><tbody>
+                    {did.map((r, i) => (
+                      <tr key={r.sid}>
+                        <td>{i + 1}</td>
+                        <td>{r.name}</td>
+                        <td style={{ fontSize: '.78rem', color: 'var(--text2)' }}>{r.id}</td>
+                        <td><b>{r.x.val}%</b></td>
+                        <td>{r.x.n}×</td>
+                        <td><button className="btn btn-outline btn-sm" onClick={() => { setResFor(null); setDetail(r.sid); }}>Дэлгэрэнгүй</button></td>
+                      </tr>
+                    ))}
+                  </tbody></table>
+                )}
               </div>
               <div className="modal-foot"><button className="btn btn-primary" onClick={() => setResFor(null)}>Хаах</button></div>
             </div>
