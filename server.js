@@ -318,8 +318,10 @@ async function handleApi(req, res, url) {
     const rec = list.find((t) => t && (t.login === login || t.email === login));
     let deleted = false;
     if (rec) {
+      // Багшийн нууц үг шаардахгүй — админы нууц үг + «TIIM» хангалттай.
+      // Firebase Auth аккаунтыг устгахад тухайн хэрэглэгчийн idToken хэрэгтэй тул
+      // нууц үг өгөгдсөн үед л хамт устгана, эс бөгөөс зөвхөн жагсаалтаас хасна.
       const pw = String(body.currentPassword || '');
-      if (!pw) return json(res, 400, { ok: false, error: 'Устгахын тулд одоогийн нууц үгийг оруулна уу' });
       if (pw) {
         try {
           const signIn = await httpsJson('POST', 'https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=' + encodeURIComponent(s.firebaseApiKey), {},
@@ -333,7 +335,7 @@ async function handleApi(req, res, url) {
       }
     }
     writeJson(FILES.teachers, list.filter((t) => t.login !== login && t.email !== login));
-    return json(res, 200, { ok: true, firebaseDeleted: deleted });
+    return json(res, 200, { ok: true, firebaseDeleted: deleted, authAccountRemains: !!rec && !deleted });
   }
 
   json(res, 404, { error: 'not found' });

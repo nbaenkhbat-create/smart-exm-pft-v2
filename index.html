@@ -10122,8 +10122,8 @@ async function seStaticApi(path, opts) {
     const rec = list.find((t) => t && (t.login === login || t.email === login));
     let deleted = false;
     if (rec) {
+      // Багшийн нууц үг шаардахгүй — нууц үг өгсөн үед л Firebase Auth аккаунтыг хамт устгана.
       const pw = String(body.currentPassword || '');
-      if (!pw) throw err('Устгахын тулд одоогийн нууц үгийг оруулна уу', 400);
       if (pw) {
         try {
           const a = await seFbAuth('signInWithPassword', { email: String(rec.email || teacherLoginToEmail(rec.login)), password: pw, returnSecureToken: true });
@@ -10133,7 +10133,7 @@ async function seStaticApi(path, opts) {
       }
     }
     SE_LS.set('se_static_teachers', list.filter((t) => t && t.login !== login && t.email !== login));
-    return { ok: true, firebaseDeleted: deleted };
+    return { ok: true, firebaseDeleted: deleted, authAccountRemains: !!rec && !deleted };
   }
   throw err('not found', 404);
 }
@@ -10250,13 +10250,14 @@ function AdminApp() {
     if (!editT) return;
     if (!editT.adm) { patchEdit({ msg: 'Админы нууц үг оруулна уу' }); return; }
     if (String(editT.tiim || '').trim().toUpperCase() !== 'TIIM') { patchEdit({ msg: 'Устгахын тулд «TIIM» гэж бичнэ үү' }); return; }
-    if (!editT.currentPassword) { patchEdit({ msg: 'Устгахын тулд багшийн одоогийн нууц үгийг оруулна уу' }); return; }
     patchEdit({ busy: true, msg: '' });
     try {
-      const r = await adminApi('/api/admin/teachers/' + encodeURIComponent(editT.old.login), { method: 'DELETE', body: JSON.stringify({ adminPassword: editT.adm, currentPassword: editT.currentPassword }) });
+      const r = await adminApi('/api/admin/teachers/' + encodeURIComponent(editT.old.login), { method: 'DELETE', body: JSON.stringify({ adminPassword: editT.adm, currentPassword: editT.currentPassword || '' }) });
       setEditT(null);
       await load();
-      alert(r && r.firebaseDeleted ? 'Устгалаа (Firebase аккаунт ч хамт устлаа).' : 'Жагсаалтаас устгалаа. Firebase аккаунт хэвээр байж болно.');
+      alert(r && r.firebaseDeleted
+        ? 'Устгалаа (Firebase Auth аккаунт ч хамт устлаа).'
+        : 'Жагсаалтаас устгалаа. Багшийн нууц үг мэдэгдэхгүй тул Firebase Auth аккаунт нь хэвээр үлдлээ — Firebase Console → Authentication-оос гар аргаар устгаж болно.');
     } catch (e) {
       patchEdit({ busy: false, msg: (e && e.message) || 'Алдаа' });
     }
@@ -10323,7 +10324,7 @@ function AdminApp() {
                   </div>
                   {!editT.old.password && (
                     <div className="form-group">
-                      <label className="form-label">Одоогийн нууц үг (нэр, нууц үг солих, устгахад шаардлагатай)</label>
+                      <label className="form-label">Одоогийн нууц үг (нэр, нууц үг солиход шаардлагатай — устгахад шаардлагагүй)</label>
                       <input className="form-input" type="password" value={editT.currentPassword}
                         onChange={e => patchEdit({ currentPassword: e.target.value })} />
                     </div>
