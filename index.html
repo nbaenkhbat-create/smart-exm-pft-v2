@@ -8780,11 +8780,11 @@ function ResultPage({ submission, exam, onHome }) {
 // ─── QR STUDENT LOGIN ─────────────────────────────────────────────────────────
 function QRStudentLogin({ exam, qrClassName, onStart, onBack }) {
   const [name, setName] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('se_student_profile_v1') || '{}').name || ''; } catch { return ''; }
+    return '';
   });
   const rawCls = (qrClassName || exam?.qrClassName || '').trim();
   const askClass = !rawCls || rawCls.toLowerCase() === ANY_CLASS.toLowerCase();
-  const [typedCls, setTypedCls] = useState(() => { try { return JSON.parse(localStorage.getItem('se_student_profile_v1') || '{}').cls || ''; } catch { return ''; } });
+  const [typedCls, setTypedCls] = useState('');
   const classLabel = askClass ? typedCls.trim() : rawCls;
   // Count questions: support both old (exam.questions) and new (exam.versions) format
   const qCount = useMemo(() => {
@@ -8871,7 +8871,7 @@ function QRStudentLogin({ exam, qrClassName, onStart, onBack }) {
           <button className="btn btn-ghost" onClick={onBack}>← Буцах</button>
           <button
             className="btn btn-violet btn-lg"
-            onClick={() => { const n=name.trim(); try { localStorage.setItem('se_student_profile_v1', JSON.stringify({ name: n, cls: classLabel })); } catch {} announceJoin(n); onStart(n, classLabel); }}
+            onClick={() => { const n=name.trim(); try { localStorage.removeItem('se_student_profile_v1'); } catch {} announceJoin(n); onStart(n, classLabel); }}
             disabled={!name.trim() || !classLabel || !!exam.stopped}
           >
             {exam?.qrCfg?.k === 'p' ? '▶ Дасгал эхлэх' : '▶ Шалгалт эхлэх'}
@@ -9123,24 +9123,99 @@ function StudentHome({ name, onStart, onLogout }) {
   );
 }
 
+/* Сурагчийн ID / нэвтрэх нэр автоматаар үүсгэх туслах функцууд */
+const SE_LAT = { а:'a', б:'b', в:'v', г:'g', д:'d', е:'e', ё:'yo', ж:'j', з:'z', и:'i', й:'i', к:'k', л:'l', м:'m', н:'n', о:'o', ө:'u', п:'p', р:'r', с:'s', т:'t', у:'u', ү:'u', ф:'f', х:'kh', ц:'ts', ч:'ch', ш:'sh', щ:'sh', ъ:'', ы:'y', ь:'', э:'e', ю:'yu', я:'ya' };
+const seLatin = (name) => String(name || '').toLowerCase().split('').map(ch => (SE_LAT[ch] != null ? SE_LAT[ch] : ch)).join('');
+const seMakeLogin = (name, taken) => {
+  const base = seLatin(name).replace(/[^a-z0-9]/g, '') || 'suragch';
+  let out = base, n = 2;
+  while ((taken || []).indexOf(out) >= 0) { out = base + n; n++; }
+  return out;
+};
+const seSha256 = async (txt) => {
+  try {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(txt));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  } catch { return ''; }
+};
+const seNextStudentId = (list) => {
+  let max = 0;
+  (list || []).forEach(m => { const v = String((m && m.studentId) || '').match(/STU(\d+)/i); if (v) max = Math.max(max, +v[1]); });
+  return 'STU' + String(max + 1).padStart(3, '0');
+};
+const seShortDur = (min) => { const m = Number(min) || 0; return m > 0 ? m + ' мин' : 'Хугацаагүй'; };
+
+// Хүснэгтийн мөрний цэс (ҮЙЛДЭЛ)
+function RowMenu({ items }) {
+  const [pos, setPos] = useState(null);
+  const btnRef = useRef(null);
+  const close = () => setPos(null);
+  const toggle = () => {
+    if (pos) { close(); return; }
+    const el = btnRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const h = 12 + items.length * 40;
+    const below = r.bottom + h + 8 < window.innerHeight;
+    setPos({
+      right: Math.max(8, window.innerWidth - r.right),
+      top: below ? r.bottom + 4 : Math.max(8, r.top - h - 4)
+    });
+  };
+  return (
+    <span style={{ display: 'inline-block' }}>
+      <button ref={btnRef} className="btn btn-outline btn-sm" onClick={toggle}>⚙ Үйлдэл</button>
+      {pos && (
+        <>
+          <div onClick={close} style={{ position: 'fixed', inset: 0, zIndex: 2990 }} />
+          <div style={{ position: 'fixed', right: pos.right, top: pos.top, zIndex: 3000, background: '#fff', border: '1px solid var(--border)', borderRadius: 10, boxShadow: '0 10px 28px rgba(15,23,42,.18)', padding: 4, minWidth: 186, textAlign: 'left' }}>
+            {items.map((it, i) => (
+              <button key={i} className="btn btn-ghost btn-sm" style={{ width: '100%', justifyContent: 'flex-start', display: 'flex' }}
+                onClick={() => { close(); it.onClick(); }}>{it.label}</button>
+            ))}
+          </div>
+        </>
+      )}
+    </span>
+  );
+}
+
 function ClassesPage({ exams, onBack }) {
   const [classes, setClasses] = useState([]);
   const [cur, setCur] = useState(null);
   const [members, setMembers] = useState({});
   const [resultsRaw, setResults] = useState({});
   const [name, setName] = useState('');
-  const [pick, setPick] = useState({ exam: '', kind: 'exam' });
-  const [kindTab, setKindTab] = useState('exam');
   const [zgImgs, setZgImgs] = useState({});
   const [zgBig, setZgBig] = useState('');
+  const [sel, setSel] = useState({});
+  const [delAsk, setDelAsk] = useState(null); // { type: 'students'|'assign', ids?, rid?, title?, text }
+  // Шинэ UI төлөв
+  const [tab, setTab] = useState('dash'); // dash | students | exams | practice
+  const [q, setQ] = useState('');
+  const [page, setPage] = useState(1);
+  const [addOpen, setAddOpen] = useState(false);
+  const [addName, setAddName] = useState('');
+  const [impOpen, setImpOpen] = useState(false);
+  const [impText, setImpText] = useState('');
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkList, setBulkList] = useState([]);
+  const [renameFor, setRenameFor] = useState(null); // { sid, name }
+  const [pwFor, setPwFor] = useState(null); // { sid, pass }
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [assignKind, setAssignKind] = useState('exam');
+  const [pick, setPick] = useState({ exam: '' });
+  const [info, setInfo] = useState(null); // exam id
+  const [resFor, setResFor] = useState(null); // exam id
   const uidv = getAuth()?.currentUser?.uid;
+  const backfilledRef = useRef('');
+
   useEffect(() => {
     const db = getDb(); if (!db || !uidv) return;
     const r = db.ref('classes').orderByChild('teacherUid').equalTo(uidv);
     r.on('value', s => {
       const list = Object.entries(s.val() || {}).map(([id, v]) => ({ id, ...v }));
       setClasses(list);
-      // Сурагчид багшийн нэрийг харуулахын тулд ангид нэрийг хадгална (хуучин ангиудыг нөхнө)
       const tn = getAuth()?.currentUser?.displayName || localStorage.getItem(SE_TEACHER);
       if (tn) list.forEach(c => { if (c.teacherName !== tn) db.ref('classes/' + c.id + '/teacherName').set(tn).catch(() => {}); });
     });
@@ -9152,20 +9227,18 @@ function ClassesPage({ exams, onBack }) {
     m.on('value', s => setMembers(s.val() || {})); r.on('value', s => setResults(s.val() || {}));
     return () => { m.off(); r.off(); };
   }, [cur]);
+
   const create = async () => {
     const db = getDb(), id = uid();
     const code = Array.from({ length: 6 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('');
     await db.ref('classes/' + id).set({ name: sanitizeText(name, 60), teacherUid: uidv, teacherName: getAuth()?.currentUser?.displayName || localStorage.getItem(SE_TEACHER) || '', code, createdAt: new Date().toISOString() });
     await db.ref('classCodes/' + code).set(id); setName('');
   };
-  const addTest = async () => {
-    const ex = exams.find(e => e.id === pick.exam); if (!ex) return;
-    await getDb().ref('classes/' + cur + '/assignments/' + ex.id).set({ title: ex.title, kind: pick.kind, at: new Date().toISOString() });
-  };
+
   const c = classes.find(x => x.id === cur);
   const results = (() => { const o = { ...resultsRaw }; Object.entries(c?.zg || {}).forEach(([rid, bySid]) => { o[rid] = { ...(o[rid] || {}) }; Object.entries(bySid || {}).forEach(([sid, att]) => { o[rid][sid] = { ...(o[rid][sid] || {}), ...att }; }); }); return o; })();
   const allTests = Object.entries(c?.assignments || {});
-  const tests = allTests.filter(([, t]) => (t.kind || 'exam') === kindTab);
+  const tests = allTests;
   const modeOf = (rid) => exams.find(e => e.id === rid)?.scoreMode || 'best';
   const cell = (rid, sid) => { const all = sortedAttempts(results[rid]?.[sid]); if (!all.length) return null;
     const full = all.filter(a => a.mode !== 'mistakes'); const base = full.length ? full : all; const m = modeOf(rid);
@@ -9180,14 +9253,152 @@ function ClassesPage({ exams, onBack }) {
       .then(r => { if (!off) setZgImgs(Object.fromEntries(r)); });
     return () => { off = true; };
   }, [detail, cur]);
-  const mIds = Object.keys(members);
+  const mIds = Object.keys(members || {}).sort((a, b) => String((members[a] || {}).name || '').localeCompare(String((members[b] || {}).name || ''), 'mn'));
+  const loginAll = mIds.map(sid => members[sid] && members[sid].login).filter(Boolean);
+  const kindOf = (rid) => { const t = (c?.assignments || {})[rid] || {}; return (t.kind || 'exam') === 'practice' ? 'practice' : 'exam'; };
+  const avgKind = (sid, kind) => {
+    const vals = allTests.filter(([rid]) => kindOf(rid) === kind).map(([rid]) => cell(rid, sid)).filter(Boolean);
+    return vals.length ? Math.round(vals.reduce((s, x) => s + x.val, 0) / vals.length) : null;
+  };
+  const avgsOf = (sid) => { const e = avgKind(sid, 'exam'), p = avgKind(sid, 'practice'); return { exam: e, practice: p, all: (e != null || p != null) ? Math.round(((e || 0) + (p || 0)) / ((e != null ? 1 : 0) + (p != null ? 1 : 0))) : null }; };
+
+  // Хуучин сурагчдад ID / нэвтрэх нэр нэг удаа олгож хадгална
+  useEffect(() => {
+    const db = getDb();
+    if (!db || !cur || backfilledRef.current === cur) return;
+    const missing = mIds.filter(sid => members[sid] && (!members[sid].studentId || !members[sid].login));
+    backfilledRef.current = cur;
+    if (!missing.length) return;
+    const ids = mIds.map(sid => members[sid]);
+    const logins = loginAll.slice();
+    missing.forEach(sid => {
+      const patch = {};
+      if (!members[sid].studentId) { const nid = seNextStudentId(ids); ids.push({ studentId: nid }); patch.studentId = nid; }
+      if (!members[sid].login) { const lg = seMakeLogin(members[sid].name, logins); logins.push(lg); patch.login = lg; }
+      db.ref('classMembers/' + cur + '/' + sid).update(patch).catch(() => {});
+    });
+  }, [cur, members]);
+
+  const addMember = async (nm) => {
+    const db = getDb(); if (!db || !cur) return false;
+    const clean = sanitizeText(String(nm || '').trim(), 80);
+    if (!clean) return false;
+    const sid = 'm_' + Math.random().toString(36).slice(2, 10);
+    const studentId = seNextStudentId(mIds.map(x => members[x]));
+    const login = seMakeLogin(clean, loginAll);
+    try {
+      await db.ref('classMembers/' + cur + '/' + sid).set({ name: clean, studentId, login, at: new Date().toISOString(), manual: true });
+      return true;
+    } catch (e) { alert('Нэмж чадсангүй: ' + (e?.message || e)); return false; }
+  };
+
+  const importFromFile = async (file) => {
+    if (!file) return;
+    try {
+      const buf = await file.arrayBuffer();
+      let names = [];
+      if (typeof XLSX !== 'undefined' && /\.(xlsx|xls)$/i.test(file.name)) {
+        const wb = XLSX.read(buf, { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        XLSX.utils.sheet_to_json(ws, { header: 1, blankrows: false }).forEach(r => { const v = String((r || [])[0] || '').trim(); if (v) names.push(v); });
+      } else {
+        const txt = new TextDecoder().decode(buf);
+        names = txt.split(/\r?\n/).map(l => String(l).split(/[,;\t]/)[0].trim()).filter(Boolean);
+      }
+      names = names.filter((v, i) => !(i === 0 && /^(нэр|name|сурагч|students?|№)$/i.test(v)));
+      let ok = 0;
+      for (const nm of names) { if (await addMember(nm)) ok++; }
+      setImpOpen(false);
+      alert(ok + ' сурагч нэмэгдлээ.');
+    } catch (e) { alert('Файл уншиж чадсангүй: ' + (e?.message || e)); }
+  };
+
+  const importFromText = async () => {
+    const names = String(impText || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    if (!names.length) return;
+    let ok = 0;
+    for (const nm of names) { if (await addMember(nm)) ok++; }
+    setImpOpen(false); setImpText('');
+    alert(ok + ' сурагч нэмэгдлээ.');
+  };
+
+  const deleteMembers = async (ids) => {
+    const db = getDb();
+    if (!db || !cur || !(ids || []).length) return;
+    const rids = allTests.map(([rid]) => rid);
+    let failed = 0;
+    for (const sid of ids) {
+      try {
+        await db.ref('classMembers/' + cur + '/' + sid).remove();
+        await db.ref('studentClasses/' + sid + '/' + cur).remove().catch(() => {});
+        await db.ref('classResults/' + cur + '/' + sid).remove().catch(() => {});
+        await db.ref('zgScans/' + cur + '/' + sid).remove().catch(() => {});
+        rids.forEach(rid => { db.ref('classes/' + cur + '/zg/' + rid + '/' + sid).remove().catch(() => {}); });
+      } catch (e) { failed++; }
+    }
+    setSel({});
+    setDelAsk(null);
+    alert(failed ? (ids.length - failed) + ' сурагч устлаа, ' + failed + ' алдаа гарлаа.' : ids.length + ' сурагч бүрмөсөн устлаа.');
+  };
+
+  const deleteAssign = async (rid) => {
+    const db = getDb(); if (!db || !cur || !rid) return;
+    try {
+      await db.ref('classes/' + cur + '/assignments/' + rid).remove();
+      setDelAsk(null);
+      setSel({});
+      alert('Ангиас хасагдлаа. (Дүнгийн бүртгэл Firebase дээр хэвээр үлддэг.)');
+    } catch (e) { alert('Хасаж чадсангүй: ' + (e?.message || e)); }
+  };
+
+  const saveRename = async () => {
+    const db = getDb(); if (!db || !cur || !renameFor) return;
+    const nm = sanitizeText(String(renameFor.name || '').trim(), 80);
+    if (!nm) return;
+    await db.ref('classMembers/' + cur + '/' + renameFor.sid + '/name').set(nm);
+    setRenameFor(null);
+  };
+
+  const savePassword = async () => {
+    const db = getDb(); if (!db || !cur || !pwFor) return;
+    const pass = String(pwFor.pass || '');
+    if (pass.length < 6) { alert('Нууц үг 6+ тэмдэгт байх ёстой'); return; }
+    const h = await seSha256('se-stu:' + pwFor.sid + ':' + pass);
+    await db.ref('classMembers/' + cur + '/' + pwFor.sid).update({ passHash: h, passSetAt: new Date().toISOString() });
+    setPwFor(null);
+    alert('Нууц үг хадгалагдлаа.');
+  };
+
+  const openBulk = () => {
+    const ids = mIds.filter(sid => sel[sid]);
+    if (!ids.length) { alert('Эхлээд сурагч сонгоно уу'); return; }
+    setBulkList(ids.map(sid => ({ sid, name: (members[sid] || {}).name || '' })));
+    setBulkOpen(true);
+  };
+  const saveBulk = async () => {
+    const db = getDb(); if (!db || !cur) return;
+    for (const it of bulkList) {
+      const nm = sanitizeText(String(it.name || '').trim(), 80);
+      if (nm && nm !== (members[it.sid] || {}).name) await db.ref('classMembers/' + cur + '/' + it.sid + '/name').set(nm);
+    }
+    setBulkOpen(false);
+    alert('Өөрчлөлт хадгалагдлаа.');
+  };
+
+  const doAssign = async () => {
+    const ex = exams.find(e => e.id === pick.exam); if (!ex) return;
+    try {
+      await getDb().ref('classes/' + cur + '/assignments/' + ex.id).set({ title: ex.title, kind: assignKind, at: new Date().toISOString() });
+      setAssignOpen(false); setPick({ exam: '' });
+    } catch (e) { alert('Оноож чадсангүй: ' + (e?.message || e)); }
+  };
 
   // Ангийн дүнг Excel (.xlsx) болгон татах: 1) нэгтгэл 2) оролдлого бүрийн дэлгэрэнгүй
   const exportExcel = () => {
     if (!c || !mIds.length) { alert('Сурагч алга байна'); return; }
     const modeTxt = { best: 'өндөр', avg: 'дундаж', last: 'сүүлийн' };
     const head = ['№', 'Сурагч', ...tests.map(([rid, t]) => t.title + ' (' + (t.kind === 'practice' ? 'дасгал' : 'шалгалт') + ' · ' + modeTxt[modeOf(rid)] + ') %'), 'Дундаж %'];
-    const sorted = [...mIds].sort((a, b) => String(members[a].name || '').localeCompare(String(members[b].name || ''), 'mn'));
+    const sorted = [...mIds];
     const rows = [head];
     sorted.forEach((sid, i) => {
       const cs = tests.map(([rid]) => cell(rid, sid)); const got = cs.filter(Boolean);
@@ -9199,7 +9410,7 @@ function ClassesPage({ exams, onBack }) {
     sorted.forEach(sid => tests.forEach(([rid, t]) => { const x = cell(rid, sid); if (!x) return;
       x.all.forEach((a, i) => det.push([members[sid].name || '', t.title, i + 1, fmtDate(a.at), a.extra ? 'Нэмэлт (дүнд тооцохгүй)' : a.mode === 'mistakes' ? 'Алдсан асуулт' : 'Бүгд', a.score, fmtDur(a.sec || 0)]));
     }));
-    const base = 'SmartEXAM_' + String(c.name || 'angi').replace(/[\\\/:*?"<>|\s]+/g, '_');
+    const base = 'SmartEXAM_' + String(c.name || 'angi').replace(/[\\/:*?"<>|\s]+/g, '_');
     if (typeof XLSX !== 'undefined') {
       const wb = XLSX.utils.book_new();
       const w1 = XLSX.utils.aoa_to_sheet(rows);
@@ -9213,49 +9424,424 @@ function ClassesPage({ exams, onBack }) {
       downloadCSV(base, rows);
     }
   };
+
+  /* ── САМБАР (DASHBOARD) ── */
+  const topStudent = (() => {
+    let best = null;
+    mIds.forEach(sid => { const a = avgsOf(sid); if (a.all == null) return; if (!best || a.all > best.all) best = { sid, name: members[sid].name, exam: a.exam, practice: a.practice, all: a.all }; });
+    return best;
+  })();
+  const cardStats = (kind) => {
+    const list = allTests.filter(([rid]) => kindOf(rid) === kind);
+    let best = null;
+    list.forEach(([rid, t]) => {
+      const vals = mIds.map(sid => cell(rid, sid)).filter(Boolean);
+      if (!vals.length) return;
+      const avg = Math.round(vals.reduce((s, x) => s + x.val, 0) / vals.length);
+      if (!best || avg > best.avg) best = { title: t.title, avg };
+    });
+    return { count: list.length, best };
+  };
+  const examStats = cardStats('exam');
+  const practiceStats = cardStats('practice');
+
+  const dashCards = [
+    { key: 'students', icon: '🎓', title: 'СУРАГЧИД (Students)', count: mIds.length, unit: 'Сурагч',
+      line: topStudent ? ('👤 ' + topStudent.name + ' · Шалгалт: ' + (topStudent.exam != null ? topStudent.exam + '%' : '—') + ', Дасгал: ' + (topStudent.practice != null ? topStudent.practice + '%' : '—')) : 'Сурагч бүртгэгдээгүй' },
+    { key: 'exams', icon: '🎓', title: 'ШАЛГАЛТУУД (Exams)', count: examStats.count, unit: 'Идэвхтэй Шалгалт',
+      line: examStats.best ? ('📄 ' + examStats.best.title + ' · Дундаж: ' + examStats.best.avg + '%') : 'Шалгалт оноогоогүй' },
+    { key: 'practice', icon: '📝', title: 'ДАСГАЛУУД (Exercises)', count: practiceStats.count, unit: 'Идэвхтэй Дасгал',
+      line: practiceStats.best ? ('📄 ' + practiceStats.best.title + ' · Дундаж: ' + practiceStats.best.avg + '%') : 'Дасгал оноогоогүй' }
+  ];
+
+  const openAdd = (key) => {
+    if (key === 'students') { setAddName(''); setAddOpen(true); return; }
+    setAssignKind(key === 'practice' ? 'practice' : 'exam');
+    setPick({ exam: '' });
+    setAssignOpen(true);
+  };
+
+  const filteredMembers = mIds.filter(sid => {
+    if (!q.trim()) return true;
+    const s = (members[sid] || {});
+    return String(s.name || '').toLowerCase().includes(q.toLowerCase()) || String(s.studentId || '').toLowerCase().includes(q.toLowerCase());
+  });
+
   return (
     <div className="container-lg" style={{ paddingTop: 16, paddingBottom: 40 }}>
-      <button className="btn btn-ghost btn-sm" onClick={cur ? () => setCur(null) : onBack}>← Буцах</button>
       {!c ? (<>
+        <button className="btn btn-ghost btn-sm" onClick={onBack}>← Буцах</button>
         <h2 style={{ margin: '10px 0' }}>👥 Миний ангиуд</h2>
-        <div className="card" style={{ marginBottom: 14 }}><div className="card-body" style={{ display: 'flex', gap: 8 }}>
-          <input className="form-input" placeholder="Шинэ ангийн нэр (жнь: 12А)" value={name} onChange={e => setName(e.target.value)} />
-          <button className="btn btn-primary" disabled={!name.trim()} onClick={create}>Анги үүсгэх</button></div></div>
-        {classes.map(x => <div key={x.id} className="exam-card" style={{ marginBottom: 10, cursor: 'pointer' }} onClick={() => setCur(x.id)}>
-          <div className="exam-card-title">{x.name}</div><div className="exam-card-meta"><span>Код: <b>{x.code}</b></span></div></div>)}
+        <div className="card" style={{ marginBottom: 14 }}><div className="card-body" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <input className="form-input" style={{ flex: 1, minWidth: 200 }} placeholder="Шинэ ангийн нэр (жнь: 12А)" value={name} onChange={e => setName(e.target.value)} />
+          <button className="btn btn-primary" disabled={!name.trim()} onClick={create}>＋ Анги үүсгэх</button></div></div>
+        {!classes.length && <div className="form-hint">Анги алга. Дээрээс шинэ анги үүсгэнэ үү.</div>}
+        {classes.map(x => <div key={x.id} className="exam-card" style={{ marginBottom: 10, cursor: 'pointer' }} onClick={() => { setCur(x.id); setTab('dash'); setQ(''); setSel({}); setPage(1); }}>
+          <div className="exam-card-title">{x.name}</div>
+          <div className="exam-card-meta" style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+            <span>Код: <b>{x.code}</b></span>
+            <span>Шалгалт: <b>{Object.values(x.assignments || {}).filter(a => (a.kind || 'exam') !== 'practice').length}</b></span>
+            <span>Дасгал: <b>{Object.values(x.assignments || {}).filter(a => a.kind === 'practice').length}</b></span>
+          </div></div>)}
       </>) : (<>
-        <h2 style={{ margin: '10px 0' }}>{c.name} <span className="badge badge-violet">Код: {c.code}</span></h2>
-        <div className="card" style={{ marginBottom: 14 }}><div className="card-body">
-          <div className="form-label">Тест / дасгал оноох</div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <select className="form-select" style={{ flex: 1, minWidth: 160 }} value={pick.exam} onChange={e => setPick(p => ({ ...p, exam: e.target.value }))}>
-              <option value="">— тест сонгох —</option>{exams.map(e => <option key={e.id} value={e.id}>{e.title}</option>)}</select>
-            <select className="form-select" style={{ width: 130 }} value={pick.kind} onChange={e => setPick(p => ({ ...p, kind: e.target.value }))}>
-              <option value="exam">Шалгалт</option><option value="practice">Дасгал</option></select>
-            <button className="btn btn-primary" disabled={!pick.exam} onClick={addTest}>Нэмэх</button></div>
-          <div className="form-hint">Оролдлогын тоо болон дүн тооцох горимыг (өндөр / дундаж / сүүлийн) тест үүсгэхдээ сонгоно.</div></div></div>
-        <div className="seg" style={{ marginBottom: 10 }}>
-          {[['exam', '🎓 Шалгалт'], ['practice', '📝 Дасгал']].map(([k, lbl]) => <button key={k} className={'seg-b' + (kindTab === k ? ' on' : '')} onClick={() => setKindTab(k)}>{lbl} ({allTests.filter(([, t]) => (t.kind || 'exam') === k).length})</button>)}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginBottom: 8 }}>
+          <button className="btn btn-ghost btn-sm" onClick={() => { setCur(null); setTab('dash'); setQ(''); setSel({}); }}>← Буцах</button>
+          <div style={{ display: 'flex', gap: 16, fontSize: '.8rem', fontWeight: 700, letterSpacing: '.02em' }}>
+            <span style={{ color: 'var(--green, #16a34a)' }}>● СУРАГЧИД (Active)</span>
+            <span style={{ color: 'var(--text2)' }}>ШАЛГАЛТУУД</span>
+          </div>
+          <span className="badge badge-violet" style={{ marginLeft: 'auto' }}>Код: {c.code}</span>
         </div>
-        {!tests.length && <div className="form-hint" style={{ marginBottom: 10 }}>Энэ хэсэгт {kindTab === 'exam' ? 'шалгалт' : 'дасгал'} алга.</div>}
-        <div className="card"><div className="card-header"><div className="card-title">📊 Дүн ({mIds.length} сурагч)</div>
-            <button className="btn btn-green btn-sm" style={{ marginLeft: 'auto' }} disabled={!mIds.length} onClick={exportExcel}>📥 Excel татах</button></div>
-          <div className="card-body" style={{ overflowX: 'auto' }}><table className="tbl"><thead><tr><th>Сурагч</th>
-            {tests.map(([rid, t]) => <th key={rid}>{t.title}<div style={{ fontWeight: 400, fontSize: '0.7rem' }}>{t.kind === 'practice' ? 'дасгал' : 'шалгалт'} · {({ best: 'өндөр', avg: 'дундаж', last: 'сүүлийн' })[modeOf(rid)]}</div></th>)}<th>Дундаж</th><th></th></tr></thead><tbody>
-            {mIds.map(sid => { const cs = tests.map(([rid]) => cell(rid, sid)); const got = cs.filter(Boolean);
-              return <tr key={sid}><td><a style={{ cursor: 'pointer', color: 'var(--primary)', fontWeight: 600 }} onClick={() => setDetail(sid)}>{members[sid].name}</a></td>
-                {cs.map((x, i) => <td key={i}>{x ? <><b>{x.val}%</b> <span style={{ color: 'var(--text3)', fontSize: '0.75rem' }}>({x.n}×)</span></> : '—'}</td>)}
-                <td><b>{got.length ? Math.round(got.reduce((s, x) => s + x.val, 0) / got.length) : '—'}{got.length ? '%' : ''}</b></td>
-                <td><button className="btn btn-red btn-sm" onClick={async () => { if (!confirm('Ангиас хасах уу?')) return; const db = getDb(); await db.ref('classMembers/' + cur + '/' + sid).remove(); db.ref('studentClasses/' + sid + '/' + cur).remove().catch(() => {}); }}>Хасах</button></td></tr>; })}
-            <tr style={{ background: 'var(--surface2)' }}><td><b>Ангийн дундаж</b></td>{tests.map(([rid]) => { const v = mIds.map(s => cell(rid, s)).filter(Boolean);
-              return <td key={rid}><b>{v.length ? Math.round(v.reduce((s, x) => s + x.val, 0) / v.length) + '%' : '—'}</b> <span style={{ fontSize: '0.75rem', color: 'var(--text3)' }}>{v.length}/{mIds.length} өгсөн</span></td>; })}<td></td><td></td></tr>
-          </tbody></table></div></div>
+        <h2 style={{ margin: '6px 0 14px', fontFamily: 'Outfit' }}>🏠 ХЯНАХ САМБАР (DASHBOARD) — {c.name} Анги</h2>
+
+        {tab === 'dash' && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))', gap: 14 }}>
+            {dashCards.map(cd => (
+              <div key={cd.key} className="card"><div className="card-body">
+                <div style={{ fontWeight: 800, fontSize: '.9rem', letterSpacing: '.02em', marginBottom: 10 }}>{cd.icon} {cd.title}</div>
+                <div style={{ background: cd.key === 'students' ? '#e8f0fe' : cd.key === 'exams' ? '#f3e8fd' : '#e7f6ee', borderRadius: 12, padding: '18px 12px', textAlign: 'center', marginBottom: 10 }}>
+                  <div style={{ fontSize: '1.7rem', fontWeight: 800, lineHeight: 1.1 }}>{cd.count}</div>
+                  <div style={{ fontSize: '.8rem', color: 'var(--text2)' }}>{cd.unit}</div>
+                </div>
+                <div style={{ fontSize: '.78rem', background: 'var(--surface2)', borderRadius: 8, padding: '8px 10px', marginBottom: 10, minHeight: 36 }}>{cd.line}</div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button className="btn btn-outline btn-sm" style={{ flex: 1 }} onClick={() => { setTab(cd.key === 'students' ? 'students' : cd.key); setPage(1); }}>🔍 Хайх</button>
+                  <button className="btn btn-primary btn-sm" style={{ flex: 1 }} onClick={() => openAdd(cd.key)}>＋ Нэмэх</button>
+                </div>
+              </div></div>
+            ))}
+          </div>
+        )}
+
+        {tab !== 'dash' && (
+          <>
+            <div className="seg" style={{ marginBottom: 12, flexWrap: 'wrap' }}>
+              {[['students', 'СУРАГЧИД'], ['exams', 'ШАЛГАЛТУУД'], ['practice', 'ДАСГАЛУУД']].map(([k, lbl]) => (
+                <button key={k} className={'seg-b' + (tab === k ? ' on' : '')} onClick={() => { setTab(k); setPage(1); setQ(''); }}>{lbl}</button>
+              ))}
+            </div>
+
+            {tab === 'students' && (
+              <div className="card"><div className="card-body">
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
+                  <div>
+                    <div style={{ fontFamily: 'Outfit', fontWeight: 800, fontSize: '1.1rem' }}>🎓 Сурагчид ({mIds.length})</div>
+                    <div style={{ fontSize: '.8rem', color: 'var(--text2)' }}>Manage individual student data for {c.name}.</div>
+                  </div>
+                  <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button className="btn btn-primary btn-sm" onClick={() => { setAddName(''); setAddOpen(true); }}>＋ Шинэ сурагч нэмэх</button>
+                    <button className="btn btn-outline btn-sm" onClick={() => { setImpText(''); setImpOpen(true); }}>⬇ Импортлох</button>
+                    <button className="btn btn-green btn-sm" disabled={!mIds.length} onClick={exportExcel}>📥 Excel</button>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', margin: '12px 0' }}>
+                  <input className="form-input" style={{ flex: 1, minWidth: 200 }} placeholder="🔍 Сурагчийн нэр эсвэл ID..." value={q} onChange={e => setQ(e.target.value)} />
+                  <button className="btn btn-outline btn-sm" onClick={openBulk}>⚙ Багцаар засах ({mIds.filter(sid => sel[sid]).length})</button>
+                  <button className="btn btn-red btn-sm" disabled={!mIds.filter(sid => sel[sid]).length} onClick={() => setDelAsk({ type: 'students', ids: mIds.filter(sid => sel[sid]), text: '' })}>🗑 Сонгосныг устгах</button>
+                </div>
+                <div style={{ overflowX: 'auto' }}><table className="tbl"><thead><tr>
+                  <th style={{ width: 32 }}><input type="checkbox" title="Бүгдийг сонгох" checked={filteredMembers.length > 0 && filteredMembers.every(sid => sel[sid])}
+                    onChange={e => setSel(e.target.checked ? Object.fromEntries(filteredMembers.map(sid => [sid, true])) : {})} /></th>
+                  <th>СУРАГЧ</th><th>ID</th><th>ШАЛГАЛТУУДЫН ДҮНДАЖ</th><th>ДАСГАЛУУДЫН ДҮНДАЖ</th><th>НЭВТРЭХ НЭР</th><th>ҮЙЛДЭЛ</th>
+                </tr></thead><tbody>
+                  {!filteredMembers.length && <tr><td colSpan={7} style={{ color: 'var(--text3)' }}>Сурагч олдсонгүй.</td></tr>}
+                  {filteredMembers.map(sid => { const m = members[sid] || {}; const a = avgsOf(sid);
+                    return (<tr key={sid}>
+                      <td><input type="checkbox" checked={!!sel[sid]} onChange={e => setSel(s => ({ ...s, [sid]: e.target.checked }))} /></td>
+                      <td><a style={{ cursor: 'pointer', color: 'var(--primary)', fontWeight: 600 }} onClick={() => setDetail(sid)}>👤 {m.name || '—'}</a></td>
+                      <td style={{ fontSize: '.8rem', color: 'var(--text2)' }}>{m.studentId || '—'}</td>
+                      <td><b>{a.exam != null ? a.exam + '%' : '—'}</b></td>
+                      <td><b>{a.practice != null ? a.practice + '%' : '—'}</b></td>
+                      <td style={{ fontSize: '.82rem' }}>{m.login || '—'}</td>
+                      <td>
+                        <RowMenu items={[
+                          { label: '⚙ Засах', onClick: () => setRenameFor({ sid, name: m.name || '' }) },
+                          { label: '🔒 Нууц үг солих', onClick: () => setPwFor({ sid, pass: '' }) },
+                          { label: '📊 Үр дүн харах', onClick: () => setDetail(sid) },
+                          { label: '🗑 Устгах', onClick: () => setDelAsk({ type: 'students', ids: [sid], text: '' }) }
+                        ]} />
+                      </td>
+                    </tr>); })}
+                </tbody></table></div>
+                <div className="form-hint" style={{ marginTop: 8 }}>ID болон нэвтрэх нэр автоматаар үүснэ. Нууц үгийг админ тогтоож, зөвхөн шифрлэсэн хэлбэрээр (hash) хадгална.</div>
+              </div></div>
+            )}
+
+            {(tab === 'exams' || tab === 'practice') && (() => {
+              const kind = tab;
+              const list = allTests.filter(([rid]) => kindOf(rid) === kind)
+                .filter(([rid, t]) => !q.trim() || String(t.title || '').toLowerCase().includes(q.toLowerCase()));
+              const per = 20;
+              const pages = Math.max(1, Math.ceil(list.length / per));
+              const cp = Math.min(page, pages);
+              const view = list.slice((cp - 1) * per, cp * per);
+              const title = kind === 'exam' ? 'Миний шалгалтууд' : 'Миний дасгалууд';
+              return (
+                <div className="card"><div className="card-body">
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap' }}>
+                    <div>
+                      <div style={{ fontFamily: 'Outfit', fontWeight: 800, fontSize: '1.1rem' }}>{kind === 'exam' ? '📋' : '📝'} {title} ({list.length})</div>
+                      <div style={{ fontSize: '.8rem', color: 'var(--text2)' }}>{c.name} ангид оноосон {kind === 'exam' ? 'шалгалт' : 'дасгал'}.</div>
+                    </div>
+                    <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <button className="btn btn-primary btn-sm" onClick={() => { setAssignKind(kind); setPick({ exam: '' }); setAssignOpen(true); }}>＋ {kind === 'exam' ? 'Шалгалт' : 'Дасгал'} нэмэх</button>
+                      <input className="form-input" style={{ width: 220 }} placeholder="🔍 Нэрээр хайх..." value={q} onChange={e => { setQ(e.target.value); setPage(1); }} />
+                    </div>
+                  </div>
+                  <div style={{ overflowX: 'auto', marginTop: 12 }}><table className="tbl"><thead><tr>
+                    <th style={{ width: 32 }}></th><th>{kind === 'exam' ? 'ШАЛГАЛТ' : 'ДАСГАЛ'}</th><th>ХИЧЭЭЛ</th><th>СУРАГЧИД</th><th>ДУНДАЖ ОНОО</th><th>ХУГАЦАА</th><th>ҮЙЛДЭЛ</th>
+                  </tr></thead><tbody>
+                    {!view.length && <tr><td colSpan={7} style={{ color: 'var(--text3)' }}>{kind === 'exam' ? 'Шалгалт' : 'Дасгал'} оноогоогүй байна.</td></tr>}
+                    {view.map(([rid, t]) => {
+                      const ex = exams.find(e => e.id === rid) || {};
+                      const vals = mIds.map(sid => cell(rid, sid)).filter(Boolean);
+                      const avg = vals.length ? Math.round(vals.reduce((s, x) => s + x.val, 0) / vals.length) : null;
+                      return (<tr key={rid}>
+                        <td><input type="checkbox" checked={!!sel[rid]} onChange={e => setSel(s => ({ ...s, [rid]: e.target.checked }))} /></td>
+                        <td style={{ fontWeight: 600 }}>📄 {t.title || ex.title || 'Тест'}</td>
+                        <td>{ex.subject || '—'}</td>
+                        <td>{vals.length} / {mIds.length}</td>
+                        <td><b>{avg != null ? avg + '%' : '—'}</b></td>
+                        <td>{seShortDur(ex.duration)}</td>
+                        <td>
+                          <RowMenu items={[
+                            { label: '📊 Үр дүн харах', onClick: () => setResFor(rid) },
+                            { label: 'ℹ Мэдээлэл', onClick: () => setInfo(rid) },
+                            { label: '🗑 Устгах', onClick: () => setDelAsk({ type: 'assign', rid, title: t.title, text: '' }) }
+                          ]} />
+                        </td>
+                      </tr>);
+                    })}
+                  </tbody></table></div>
+                  {pages > 1 && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, fontSize: '.82rem', color: 'var(--text2)', flexWrap: 'wrap' }}>
+                      <span>Pagination:</span>
+                      <button className="btn btn-ghost btn-sm" disabled={cp <= 1} onClick={() => setPage(cp - 1)}>Prev</button>
+                      <span>| {cp} / {pages} |</span>
+                      <button className="btn btn-ghost btn-sm" disabled={cp >= pages} onClick={() => setPage(cp + 1)}>Next</button>
+                      <span>· {((cp - 1) * per) + 1}-{Math.min(cp * per, list.length)} of {list.length}</span>
+                    </div>
+                  )}
+                </div></div>
+              );
+            })()}
+          </>
+        )}
       </>)}
+
+      {delAsk && (
+        <div className="modal-overlay" style={{ zIndex: 600 }}>
+          <div className="modal" style={{ maxWidth: 440 }}>
+            <div className="modal-head"><div style={{ fontFamily: 'Outfit', fontWeight: 800 }}>Устгах баталгаажуулалт</div></div>
+            <div className="modal-body">
+              <div style={{ marginBottom: 10 }}>
+                {delAsk.type === 'assign' ? (
+                  <><b>{delAsk.title || 'Тест'}</b> ангиас хасагдана. Дүнгийн бүртгэл Firebase дээр үлдэнэ.</>
+                ) : (
+                  <><b>{delAsk.ids.length} сурагч</b> бүрмөсөн устана: гишүүнчлэл, дүн, оролдлого, скан хуудас хамт. Энэ үйлдлийг буцаах боломжгүй.</>
+                )}
+              </div>
+              <div className="form-hint" style={{ marginBottom: 8 }}>Үргэлжлүүлэхийн тулд доор <b>TIIM</b> гэж бичнэ үү.</div>
+              <input className="form-input" autoFocus placeholder="TIIM" value={delAsk.text}
+                onChange={e => setDelAsk(a => (a ? { ...a, text: e.target.value } : a))}
+                onKeyDown={e => { if (e.key === 'Enter' && String(delAsk.text).trim().toUpperCase() === 'TIIM') { delAsk.type === 'assign' ? deleteAssign(delAsk.rid) : deleteMembers(delAsk.ids); } }} />
+            </div>
+            <div className="modal-foot" style={{ flexWrap: 'wrap', gap: 8 }}>
+              <button className="btn btn-outline" onClick={() => setDelAsk(null)}>Болих</button>
+              <button className="btn btn-red" disabled={String(delAsk.text).trim().toUpperCase() !== 'TIIM'}
+                onClick={() => { delAsk.type === 'assign' ? deleteAssign(delAsk.rid) : deleteMembers(delAsk.ids); }}>🗑 Устгах</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {addOpen && (
+        <div className="modal-overlay" style={{ zIndex: 500 }}>
+          <div className="modal" style={{ maxWidth: 420 }}>
+            <div className="modal-head"><div style={{ fontFamily: 'Outfit', fontWeight: 800 }}>Шинэ сурагч нэмэх</div></div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label className="form-label">Сурагчийн нэр</label>
+                <input className="form-input" autoFocus value={addName} onChange={e => setAddName(e.target.value)}
+                  placeholder="жнь: Б.Батбаяр" onKeyDown={async e => { if (e.key === 'Enter' && addName.trim()) { await addMember(addName); setAddOpen(false); } }} />
+              </div>
+              <div className="form-hint">ID (STU001) болон нэвтрэх нэр автоматаар үүснэ.</div>
+            </div>
+            <div className="modal-foot" style={{ gap: 8, flexWrap: 'wrap' }}>
+              <button className="btn btn-outline" onClick={() => setAddOpen(false)}>Болих</button>
+              <button className="btn btn-primary" disabled={!addName.trim()} onClick={async () => { const ok = await addMember(addName); if (ok) setAddOpen(false); }}>＋ Нэмэх</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {impOpen && (
+        <div className="modal-overlay" style={{ zIndex: 500 }}>
+          <div className="modal" style={{ maxWidth: 520 }}>
+            <div className="modal-head"><div style={{ fontFamily: 'Outfit', fontWeight: 800 }}>Сурагч импортлох</div></div>
+            <div className="modal-body">
+              <div className="form-label">Excel (.xlsx) эсвэл CSV файл</div>
+              <input className="form-input" type="file" accept=".xlsx,.xls,.csv,.txt" onChange={e => importFromFile(e.target.files && e.target.files[0])} />
+              <div className="form-hint">Файлын эхний баганад нэрс байх ёстой (толгойн мөр автоматиар алгасагдана).</div>
+              <div className="form-label" style={{ marginTop: 12 }}>Эсвэл нэрсээ мөр тус бүрээр буулгана</div>
+              <textarea className="form-textarea" rows={5} placeholder="Б.Батбаяр&#10;Г.Марал" value={impText} onChange={e => setImpText(e.target.value)} />
+            </div>
+            <div className="modal-foot" style={{ gap: 8, flexWrap: 'wrap' }}>
+              <button className="btn btn-outline" onClick={() => setImpOpen(false)}>Болих</button>
+              <button className="btn btn-primary" disabled={!impText.trim()} onClick={importFromText}>＋ Нэмэх</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {bulkOpen && (
+        <div className="modal-overlay" style={{ zIndex: 500 }}>
+          <div className="modal" style={{ maxWidth: 520 }}>
+            <div className="modal-head"><div style={{ fontFamily: 'Outfit', fontWeight: 800 }}>Багцаар засах ({bulkList.length})</div></div>
+            <div className="modal-body" style={{ maxHeight: '60vh', overflowY: 'auto' }}>
+              {bulkList.map((it, i) => (
+                <div key={it.sid} className="form-group">
+                  <label className="form-label">{(members[it.sid] || {}).studentId || '—'} · нэр</label>
+                  <input className="form-input" value={it.name}
+                    onChange={e => setBulkList(l => l.map((x, k) => (k === i ? { ...x, name: e.target.value } : x)))} />
+                </div>
+              ))}
+            </div>
+            <div className="modal-foot" style={{ gap: 8, flexWrap: 'wrap' }}>
+              <button className="btn btn-outline" onClick={() => setBulkOpen(false)}>Болих</button>
+              <button className="btn btn-red" onClick={() => { const ids = bulkList.map(x => x.sid); setBulkOpen(false); setDelAsk({ type: 'students', ids, text: '' }); }}>🗑 Сонгосныг устгах</button>
+              <button className="btn btn-primary" onClick={saveBulk}>💾 Хадгалах</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {renameFor && (
+        <div className="modal-overlay" style={{ zIndex: 500 }}>
+          <div className="modal" style={{ maxWidth: 400 }}>
+            <div className="modal-head"><div style={{ fontFamily: 'Outfit', fontWeight: 800 }}>Сурагчийн нэр засах</div></div>
+            <div className="modal-body">
+              <input className="form-input" autoFocus value={renameFor.name}
+                onChange={e => setRenameFor(r => (r ? { ...r, name: e.target.value } : r))}
+                onKeyDown={e => { if (e.key === 'Enter') saveRename(); }} />
+            </div>
+            <div className="modal-foot" style={{ gap: 8 }}>
+              <button className="btn btn-outline" onClick={() => setRenameFor(null)}>Болих</button>
+              <button className="btn btn-primary" onClick={saveRename}>💾 Хадгалах</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pwFor && (
+        <div className="modal-overlay" style={{ zIndex: 500 }}>
+          <div className="modal" style={{ maxWidth: 400 }}>
+            <div className="modal-head"><div style={{ fontFamily: 'Outfit', fontWeight: 800 }}>Нууц үг солих · {(members[pwFor.sid] || {}).name || ''}</div></div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label className="form-label">Шинэ нууц үг (6+)</label>
+                <input className="form-input" type="text" autoFocus value={pwFor.pass}
+                  onChange={e => setPwFor(p => (p ? { ...p, pass: e.target.value } : p))}
+                  onKeyDown={e => { if (e.key === 'Enter') savePassword(); }} />
+              </div>
+              <div className="form-hint">Зөвхөн шифрлэсэн хэлбэрээр (SHA-256 hash) хадгалагдана.</div>
+            </div>
+            <div className="modal-foot" style={{ gap: 8 }}>
+              <button className="btn btn-outline" onClick={() => setPwFor(null)}>Болих</button>
+              <button className="btn btn-primary" onClick={savePassword}>💾 Хадгалах</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {assignOpen && (
+        <div className="modal-overlay" style={{ zIndex: 500 }}>
+          <div className="modal" style={{ maxWidth: 460 }}>
+            <div className="modal-head"><div style={{ fontFamily: 'Outfit', fontWeight: 800 }}>{assignKind === 'exam' ? 'Шалгалт' : 'Дасгал'} нэмэх</div></div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label className="form-label">Тест сонгох</label>
+                <select className="form-select" value={pick.exam} onChange={e => setPick({ exam: e.target.value })}>
+                  <option value="">— тест сонгох —</option>
+                  {exams.map(e => <option key={e.id} value={e.id}>{e.title}</option>)}
+                </select>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Төрөл</label>
+                <select className="form-select" value={assignKind} onChange={e => setAssignKind(e.target.value)}>
+                  <option value="exam">Шалгалт</option>
+                  <option value="practice">Дасгал</option>
+                </select>
+              </div>
+              <div className="form-hint">Оролдлогын тоо, дүн тооцох горимыг тест үүсгэхдээ сонгоно.</div>
+            </div>
+            <div className="modal-foot" style={{ gap: 8 }}>
+              <button className="btn btn-outline" onClick={() => setAssignOpen(false)}>Болих</button>
+              <button className="btn btn-primary" disabled={!pick.exam} onClick={doAssign}>＋ Нэмэх</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {info && (() => {
+        const ex = exams.find(e => e.id === info) || {};
+        const t = (c?.assignments || {})[info] || {};
+        const vals = mIds.map(sid => cell(info, sid)).filter(Boolean);
+        const avg = vals.length ? Math.round(vals.reduce((s, x) => s + x.val, 0) / vals.length) : null;
+        return (
+          <div className="modal-overlay" style={{ zIndex: 500 }} onClick={e => e.target === e.currentTarget && setInfo(null)}>
+            <div className="modal" style={{ maxWidth: 460 }}>
+              <div className="modal-head"><div style={{ fontFamily: 'Outfit', fontWeight: 800 }}>ℹ {t.title || ex.title || 'Тест'}</div></div>
+              <div className="modal-body">
+                <table className="tbl"><tbody>
+                  <tr><td>Төрөл</td><td>{(t.kind === 'practice') ? 'Дасгал' : 'Шалгалт'}</td></tr>
+                  <tr><td>Хичээл</td><td>{ex.subject || '—'}</td></tr>
+                  <tr><td>Хугацаа</td><td>{seShortDur(ex.duration)}</td></tr>
+                  <tr><td>Асуулт</td><td>{(ex.variants || []).reduce((n, v) => n + ((v.questions || []).length), 0) || '—'}</td></tr>
+                  <tr><td>Оноосон</td><td>{t.at ? fmtDate(t.at) : '—'}</td></tr>
+                  <tr><td>Өгсөн</td><td>{vals.length} / {mIds.length}</td></tr>
+                  <tr><td>Дундаж</td><td><b>{avg != null ? avg + '%' : '—'}</b></td></tr>
+                </tbody></table>
+              </div>
+              <div className="modal-foot"><button className="btn btn-primary" onClick={() => setInfo(null)}>Хаах</button></div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {resFor && (() => {
+        const ex = exams.find(e => e.id === resFor) || {};
+        const t = (c?.assignments || {})[resFor] || {};
+        const rows = mIds.map(sid => ({ sid, name: (members[sid] || {}).name || '—', x: cell(resFor, sid) }));
+        return (
+          <div className="modal-overlay" style={{ zIndex: 500 }} onClick={e => e.target === e.currentTarget && setResFor(null)}>
+            <div className="modal" style={{ maxWidth: 560 }}>
+              <div className="modal-head"><div style={{ fontFamily: 'Outfit', fontWeight: 800 }}>📊 {t.title || ex.title || 'Тест'} · үр дүн</div></div>
+              <div className="modal-body" style={{ maxHeight: '60vh', overflowY: 'auto' }}>
+                <table className="tbl"><thead><tr><th>Сурагч</th><th>ID</th><th>Дүн</th><th>Оролдлого</th><th></th></tr></thead><tbody>
+                  {rows.map(r => (
+                    <tr key={r.sid}>
+                      <td>{r.name}</td>
+                      <td style={{ fontSize: '.78rem', color: 'var(--text2)' }}>{(members[r.sid] || {}).studentId || '—'}</td>
+                      <td><b>{r.x ? r.x.val + '%' : '—'}</b></td>
+                      <td>{r.x ? r.x.n + '×' : '—'}</td>
+                      <td>{r.x ? <button className="btn btn-outline btn-sm" onClick={() => { setResFor(null); setDetail(r.sid); }}>Дэлгэрэнгүй</button> : null}</td>
+                    </tr>
+                  ))}
+                </tbody></table>
+              </div>
+              <div className="modal-foot"><button className="btn btn-primary" onClick={() => setResFor(null)}>Хаах</button></div>
+            </div>
+          </div>
+        );
+      })()}
+
       {zgBig && (
         <div className="modal-overlay" style={{ zIndex: 400 }} onClick={() => setZgBig('')}>
           <img src={zgBig} alt="" style={{ maxWidth: '100%', maxHeight: '92vh', borderRadius: 10, background: '#fff' }} />
         </div>
       )}
+
       {detail && members[detail] && (
         <div className="modal-overlay" onClick={e => e.target === e.currentTarget && setDetail(null)}>
           <div className="modal" style={{ maxWidth: 560 }}>
@@ -9386,38 +9972,6 @@ const SE_LS = {
   get: (k, fb) => { try { const s = localStorage.getItem(k); return s ? JSON.parse(s) : fb; } catch { return fb; } },
   set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
 };
-const seAiState = () => SE_LS.get('se_static_ai', { enabled: false, start: '08:00', end: '18:00', extraEmail: '', simLogin: '', simUid: '', lastTick: 0, lastReportAt: 0, commands: [] });
-const seSaveAiState = (st) => SE_LS.set('se_static_ai', st);
-const seChat = () => SE_LS.get('se_static_chat', []);
-const seSim = () => SE_LS.get('se_static_sim', { exams: [], assignments: [], studentWork: [], audits: [] });
-const seSaveSim = (ws) => SE_LS.set('se_static_sim', ws);
-
-const sePushChat = (role, text, extra) => {
-  const list = seChat();
-  list.push(Object.assign({ id: Math.random().toString(16).slice(2, 12) + Date.now().toString(16), t: new Date().toISOString(), role, text: String(text || '').slice(0, 4000) }, extra || {}));
-  while (list.length > 400) list.shift();
-  SE_LS.set('se_static_chat', list);
-  return list[list.length - 1];
-};
-
-const seInSchedule = (st) => {
-  const now = new Date();
-  const hm = now.getHours() * 60 + now.getMinutes();
-  const sp = String(st.start || '00:00').split(':');
-  const ep = String(st.end || '23:59').split(':');
-  const a = (Number(sp[0]) || 0) * 60 + (Number(sp[1]) || 0);
-  const b = (Number(ep[0]) || 23) * 60 + (Number(ep[1]) || 59);
-  if (a <= b) return hm >= a && hm <= b;
-  return hm >= a || hm <= b;
-};
-
-/* AI1/AI2-ийн түүхий текстийг хасна: тэдгээр AI3-д бүрэн хэлбэрээр тусгайлан илгээгддэг бөгөөд
-   энд 180 тэмдэгтээр тасдагдаж хувирах тул AI3 "JSON тасдагдсан" гэж буруу дүгнэдэг байв. */
-const seCompactLogs = (n) => seChat()
-  .filter((m) => m.role !== 'AI1' && m.role !== 'AI2')
-  .slice(-n)
-  .map((m) => m.role + ': ' + String(m.text).replace(/\s+/g, ' ').slice(0, 180)).join('\n');
-
 let seSecretsCache = null;
 const seSecrets = async () => {
   if (seSecretsCache) return seSecretsCache;
@@ -9441,228 +9995,63 @@ const seCheckPassword = async (pass) => {
   } catch { return false; }
 };
 
-const seGroq = async (messages, maxTok) => {
-  const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + SCAN_GROQ_KEY },
-    body: JSON.stringify({ model: SCAN_GROQ_MODEL, temperature: 0.3, max_tokens: maxTok || 280, messages })
-  });
-  const text = await r.text();
-  let data = null; try { data = JSON.parse(text); } catch {}
-  if (r.status >= 400) throw new Error((data && data.error && data.error.message) || ('Groq ' + r.status));
-  const m = data && data.choices && data.choices[0] && data.choices[0].message;
-  return (m && m.content) || '';
-};
-
-const seSendEmail = async (toList, subject, message) => {
+/* ── Firebase Auth REST: багшийн нэвтрэх нэр / нууц үгийг админ солих, аккаунт устгах ── */
+const seFbAuth = async (endpoint, payload) => {
   const s = await seSecrets();
-  const addrs = Array.from(new Set([s.reportEmail].concat(toList || []).filter(Boolean)));
-  const results = [];
-  for (const to of addrs) {
-    try {
-      const r = await fetch('https://formsubmit.co/ajax/' + encodeURIComponent(to), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ name: 'SmartEXAM AI', _subject: subject, message: message })
-      });
-      results.push({ to: to, ok: r.ok, status: r.status });
-    } catch (e) { results.push({ to: to, ok: false, error: String((e && e.message) || e) }); }
-  }
-  return results;
-};
-
-/* ── AI1-ийн JSON-ыг хуудас дээр ашиглах боломжтой бодит тест болгох ── */
-const seAiParseJson = (text) => {
-  try { const m = String(text || '').match(/\{[\s\S]*\}/); return m ? JSON.parse(m[0]) : null; } catch { return null; }
-};
-
-const seAiBuildExam = (raw, owner) => {
-  if (!raw) return null;
-  const src = Array.isArray(raw.q) ? raw.q : (Array.isArray(raw.questions) ? raw.questions : []);
-  const qs = [];
-  src.forEach((item) => {
-    const q = item || {};
-    const text = String(q.t || q.text || q.question || '').replace(/\s+/g, ' ').trim().slice(0, 400);
-    if (!text) return;
-    const rawOpts = Array.isArray(q.opts) ? q.opts : (Array.isArray(q.options) ? q.options : []);
-    const options = rawOpts
-      .map((t, k) => ({ key: alpha(k), text: String(t && typeof t === 'object' ? (t.text || '') : t).trim().slice(0, 200) }))
-      .filter((o) => o.text);
-    const ansRaw = q.ans != null ? q.ans : q.answer;
-    let type = q.type;
-    if (type !== 'mcq' && type !== 'blank' && type !== 'open') type = options.length >= 2 ? 'mcq' : 'blank';
-    if (type === 'mcq' && options.length < 2) type = 'blank';
-    const id = qs.length + 1;
-    if (type === 'mcq') {
-      const a = String(ansRaw == null ? '' : ansRaw).trim();
-      const hit = options.find((o) => o.text.toLowerCase() === a.toLowerCase());
-      const letter = /^[A-Fa-f]$/.test(a) ? a.toUpperCase() : '';
-      const key = hit ? hit.key : (options.some((o) => o.key === letter) ? letter : options[0].key);
-      qs.push({ id, type: 'mcq', text, options, answer: key });
-    } else if (type === 'open') {
-      qs.push({ id, type: 'open', text, answer: '' });
-    } else {
-      qs.push({ id, type: 'blank', text, answer: String(ansRaw == null ? '' : ansRaw).trim().slice(0, 200) });
-    }
+  const key = String(s.firebaseApiKey || '');
+  if (!key) throw new Error('firebaseApiKey олдсонгүй (data/secrets.json)');
+  const r = await fetch('https://identitytoolkit.googleapis.com/v1/accounts:' + endpoint + '?key=' + encodeURIComponent(key), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload || {})
   });
-  if (!qs.length) return null;
-  return {
-    id: 'sim-' + Date.now(),
-    title: String(raw.title || 'AI дасгал').replace(/\s+/g, ' ').trim().slice(0, 120) || 'AI дасгал',
-    subject: 'English', duration: 0, passingScore: 60, maxAttempts: 0, scoreMode: 'best',
-    antiCheat: false, published: true, aiGenerated: true, owner: owner || 'sim',
-    questions: qs, variants: [{ label: 'A', questions: qs }],
-    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
-  };
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((data && data.error && data.error.message) || ('Firebase ' + r.status));
+  return data || {};
 };
 
-/* AI2-ийн хариултыг сурагчийн бодит оролдлогын хэлбэрээр дүгнэх */
-const seAiBuildSubmission = (exam, text) => {
-  if (!exam || !exam.questions) return null;
-  const parsed = seAiParseJson(text);
-  const list = parsed && Array.isArray(parsed.answers) ? parsed.answers : null;
-  if (!list) return null;
-  const answers = {};
-  exam.questions.forEach((q, i) => {
-    const a = list[i] != null ? list[i] : (q.id != null ? list.find((x) => x && x.id === q.id) : null);
-    if (a == null || a === '') return;
-    if (q.type === 'mcq') {
-      const s = String(a).trim();
-      const hit = (q.options || []).find((o) => o.text.toLowerCase() === s.toLowerCase());
-      const letter = /^[A-Fa-f]$/.test(s) ? s.toUpperCase() : '';
-      answers[q.id] = hit ? hit.key : ((q.options || []).some((o) => o.key === letter) ? letter : s.slice(0, 4));
-    } else {
-      answers[q.id] = String(a).slice(0, 200);
-    }
-  });
-  let correct = 0, total = 0;
-  exam.questions.forEach((q) => {
-    if (q.answer == null || q.answer === '') return;
-    total++;
-    if (answersEqual(answers[q.id], q.answer, q.type)) correct++;
-  });
-  if (!total) return null;
-  const score = Math.round((correct / total) * 100);
-  const now = new Date().toISOString();
-  return {
-    id: 'aisub-' + exam.id, examId: exam.id, answers, score, correctCount: correct, totalCount: total,
-    studentName: 'AI2 сурагч', studentClass: 'Симуляц', submittedAt: now, at: now,
-    verified: true, gradedBy: 'ai', aiGenerated: true
-  };
-};
-
-/* AI-ийн ажлыг бодитоор хуудас дээр гаргах: тест → «Шалгалт», хариулт → «Үр дүн» */
-const seAiPublishWork = (exam, sub) => {
+/* record-ийн нэвтрэх нэр/нууц үгийг Firebase дээр бодитоор солино */
+const seTeacherCredsUpdate = async (rec, patch) => {
+  const oldEmail = String(rec.email || teacherLoginToEmail(rec.login)).toLowerCase();
+  const newLogin = String(patch.login || rec.login || '').trim();
+  const newName = String(patch.name || rec.name || newLogin).trim().slice(0, 80);
+  const newEmail = teacherLoginToEmail(newLogin);
+  const newPass = String(patch.password || '');
+  const oldPass = String(rec.password || patch.currentPassword || '');
+  const emailChanged = !!newEmail && newEmail !== oldEmail;
+  const passChanged = !!newPass && newPass !== String(rec.password || '');
+  const out = { login: newLogin, name: newName, email: newEmail || oldEmail, password: newPass || oldPass, uid: rec.uid || '', warning: '' };
+  if (!emailChanged && !passChanged) return out;
+  if (newPass && newPass.length < 6) throw new Error('Шинэ нууц үг 6+ тэмдэгт байх ёстой');
+  if (!oldPass) throw new Error('Одоогийн нууц үгийг оруулна уу');
+  let auth = null;
   try {
-    const exams = JSON.parse(localStorage.getItem('se_exams') || '[]');
-    const human = exams.filter((e) => e && !e.aiGenerated);
-    const ai = exams.filter((e) => e && e.aiGenerated && e.id !== (exam && exam.id));
-    if (exam) ai.push(exam);
-    localStorage.setItem('se_exams', JSON.stringify(human.concat(ai.slice(-3))));
-  } catch (e) { console.warn('seAiPublishWork exams', e && e.message); }
-  if (sub) {
-    try {
-      const subs = JSON.parse(localStorage.getItem('se_submissions') || '[]');
-      const human = subs.filter((s) => s && !s.aiGenerated);
-      const ai = subs.filter((s) => s && s.aiGenerated && s.examId !== sub.examId);
-      ai.push(sub);
-      localStorage.setItem('se_submissions', JSON.stringify(human.concat(ai.slice(-6))));
-    } catch (e) { console.warn('seAiPublishWork subs', e && e.message); }
-  }
-  try { window.dispatchEvent(new CustomEvent('se_ai_work', { detail: { examId: exam ? exam.id : '' } })); } catch {}
-};
-
-/* Сервер горимын симуляцийн ажлыг (server.js data/sim-workspace.json) энэ төхөөрөмжийн
-   «Шалгалт» / «Үр дүн» рүү шилжүүлнэ — симуляцийн багш аккаунтаар нэвтрээд шууд харна. */
-let seSimPublishedId = '';
-const seAiPublishFromSim = (sim) => {
-  try {
-    const list = (sim && sim.exams) || [];
-    const last = list[list.length - 1];
-    if (!last || !last.q || seSimPublishedId === last.id) return;
-    const exam = seAiBuildExam(last, last.owner || 'sim');
-    if (!exam) return;
-    const work = ((sim.studentWork || []).slice().reverse()).find((w) => w && w.examId === last.id);
-    const sub = work ? seAiBuildSubmission(exam, work.a2) : null;
-    seAiPublishWork(exam, sub);
-    seSimPublishedId = last.id;
-  } catch (e) { console.warn('seAiPublishFromSim', e && e.message); }
-};
-
-/* AI1–AI4 ажилтнууд: server.js байхгүй үед (GitHub Pages) хуудас нээлттэй байхад браузер дээр ажиллана */
-async function seStaticTick() {
-  const st = seAiState();
-  if (!st.enabled || !seInSchedule(st)) return;
-  const now = Date.now();
-  if (now - (st.lastTick || 0) < 40000) return; // rate limit (server ижил)
-  st.lastTick = now;
-  seSaveAiState(st);
-
-  const ws = seSim();
-  const sys = 'MN school exam sim. Reply compact MN/EN. Max 80 words. No secrets.';
-  const cmd = (st.commands || []).shift();
-  if (cmd) seSaveAiState(st);
-
-  try {
-    if (cmd) {
-      const out = await seGroq([
-        { role: 'system', content: sys + ' You are AI4 admin secretary. Do the task or report AI1-3 status.' },
-        { role: 'user', content: ('CMD:' + cmd + '\nLOG:\n' + seCompactLogs(8)).slice(0, 1200) }
-      ], 220);
-      sePushChat('AI4', out, { kind: 'command' });
-    }
-
-    const a1 = await seGroq([
-      { role: 'system', content: 'You are AI1, an English teacher. Output ONLY one complete ASCII-JSON object, no markdown, no commentary, no Cyrillic: {"title":"...","q":[{"t":"question text","type":"mcq","opts":["a","b","c","d"],"ans":"exact option text"}]} . Use type mcq (4 opts) or blank (opts:[]). Exactly 5 questions. Every JSON string must be closed.' },
-      { role: 'user', content: 'Make a 5-question English practice set. Rotate topic: vocabulary / gerunds / so that / tenses.' }
-    ], 700);
-    sePushChat('AI1', a1, { kind: 'teach' });
-    const examJson = seAiParseJson(a1);
-    const appExam = seAiBuildExam(examJson, st.simLogin || 'sim');
-    if (appExam) {
-      ws.exams = (ws.exams || []).slice(-20).concat([{ id: appExam.id, title: appExam.title, at: appExam.createdAt, owner: appExam.owner }]);
-    }
-
-    const a2 = await seGroq([
-      { role: 'system', content: 'You are AI2, a student. Reply with ONLY complete ASCII-JSON {"answers":[...]} — one answer per question, in order, matching each option text exactly. No markdown, no Cyrillic, no extra text.' },
-      { role: 'user', content: JSON.stringify(appExam ? { title: appExam.title, q: appExam.questions.map((q) => ({ t: q.text, type: q.type, opts: (q.options || []).map((o) => o.text) })) } : (examJson || {})).slice(0, 1600) }
-    ], 400);
-    sePushChat('AI2', a2, { kind: 'student' });
-    ws.studentWork = (ws.studentWork || []).slice(-20).concat([{ examId: appExam ? appExam.id : '', a2: a2, at: new Date().toISOString() }]);
-    // Бодит үр дүн: тест → багшийн «Шалгалт», хариулт → «Үр дүн» (админд түүхий текст очихгүй)
-    if (appExam) {
-      const sub = seAiBuildSubmission(appExam, a2);
-      seAiPublishWork(appExam, sub);
-    }
-
-    const a3 = await seGroq([
-      { role: 'system', content: sys + ' You are AI3 auditor. Find bugs/unclear text. JSON {"bugs":[],"ideas":[]}' },
-      { role: 'user', content: ('AI1:\n' + a1 + '\nAI2:\n' + a2 + '\nLOG:\n' + seCompactLogs(6)).slice(0, 1400) }
-    ], 240);
-    sePushChat('AI3', a3, { kind: 'audit' });
-    ws.audits = (ws.audits || []).slice(-20).concat([{ at: appExam ? appExam.createdAt : new Date().toISOString(), a3: a3 }]);
-    seSaveSim(ws);
+    auth = await seFbAuth('signInWithPassword', { email: oldEmail, password: oldPass, returnSecureToken: true });
   } catch (e) {
-    sePushChat('SYS', 'AI алдаа: ' + ((e && e.message) || e), { kind: 'error' });
+    throw new Error('Одоогийн нууц үг буруу байна (' + ((e && e.message) || '') + ')');
   }
-
-  const st2 = seAiState();
-  const ep = String(st2.end || '18:00').split(':');
-  const nowD = new Date();
-  const endMin = (Number(ep[0]) || 18) * 60 + (Number(ep[1]) || 0);
-  const hm = nowD.getHours() * 60 + nowD.getMinutes();
-  const dayKey = nowD.toISOString().slice(0, 10);
-  if (hm >= endMin && st2.lastReportAt !== dayKey && (ws.exams || []).length) {
-    try {
-      await seSendEmail([st2.extraEmail], 'SmartEXAM AI тайлан ' + dayKey, 'SmartEXAM AI өдрийн тайлан ' + dayKey + '\n\n' + seCompactLogs(30));
-      sePushChat('SYS', 'Тайлан имэйл илгээлээ.', { kind: 'mail' });
-    } catch (e) {
-      sePushChat('SYS', 'Имэйл алдаа: ' + ((e && e.message) || e), { kind: 'error' });
-    }
-    st2.lastReportAt = dayKey;
-    seSaveAiState(st2);
+  if (!emailChanged) {
+    const r = await seFbAuth('update', { idToken: auth.idToken, returnSecureToken: true, password: newPass, displayName: newName });
+    out.uid = (r && r.localId) || auth.localId || out.uid;
+    return out;
   }
-}
+  /* Firebase нь нэвтрэх имэйлийг шууд солихыг зөвшөөрдөггүй (шинэ имэйлээ баталгаажуулахыг
+     шаарддаг) тул шинэ аккаунт үүсгэж, хуучныг устгана — UID шинээр үүснэ. */
+  const pw = newPass || oldPass;
+  let su = null;
+  try {
+    su = await seFbAuth('signUp', { email: newEmail, password: pw, returnSecureToken: true });
+  } catch (e) {
+    throw new Error('Шинэ нэвтрэх нэрээр аккаунт үүсгэсэнгүй (' + ((e && e.message) || '') + ')');
+  }
+  try { await seFbAuth('update', { idToken: su.idToken, returnSecureToken: true, displayName: newName }); } catch (e) {}
+  try {
+    await seFbAuth('delete', { idToken: auth.idToken });
+  } catch (e) {
+    out.warning = 'Хуучин аккаунтыг устгаж чадсангүй: ' + ((e && e.message) || '');
+  }
+  out.uid = su.localId || out.uid;
+  out.password = pw;
+  return out;
+};
 
 async function seStaticApi(path, opts) {
   const method = ((opts && opts.method) || 'GET').toUpperCase();
@@ -9681,7 +10070,16 @@ async function seStaticApi(path, opts) {
   if (path === '/api/admin/me') return { ok: true, staticMode: true };
 
   if (path === '/api/admin/teachers' && method === 'GET') {
-    return { ok: true, teachers: SE_LS.get('se_static_teachers', []) };
+    const raw = SE_LS.get('se_static_teachers', []);
+    // Хуучин хувилбар нууц үг хадгалсан байвал цэвэрлэнэ (локалд нууц үг үлдэхгүй)
+    let dirty = false;
+    const list = (raw || []).map((t) => {
+      if (!t) return t;
+      if (Object.prototype.hasOwnProperty.call(t, 'password')) { dirty = true; const c = Object.assign({}, t); delete c.password; return c; }
+      return t;
+    });
+    if (dirty) SE_LS.set('se_static_teachers', list);
+    return { ok: true, teachers: list };
   }
   if (path === '/api/admin/teachers' && method === 'POST') {
     const login = String(body.login || '').trim();
@@ -9695,51 +10093,47 @@ async function seStaticApi(path, opts) {
       uid = (cred && cred.uid) || '';
     } catch (e) { throw err((e && e.message) || 'Бүртгэл үүсгэсэнгүй'); }
     const list = SE_LS.get('se_static_teachers', []);
+    // Нууц үгийг браузер/файлд ХАДГАЛАХГҮЙ — устгах, солиход админ одоогийн нууц үгийг бичнэ.
     list.push({ login: login, email: email, name: name, uid: uid, createdAt: new Date().toISOString() });
     SE_LS.set('se_static_teachers', list);
     return { ok: true, email: email, uid: uid, staticMode: true };
   }
-  if (path.indexOf('/api/admin/teachers/') === 0 && method === 'DELETE') {
-    const login = decodeURIComponent(path.split('/').pop());
-    SE_LS.set('se_static_teachers', SE_LS.get('se_static_teachers', []).filter((t) => t.login !== login && t.email !== login));
-    return { ok: true };
-  }
-  if (path === '/api/admin/ai/state' && method === 'GET') {
-    const st = seAiState();
-    // AI1/AI2-ын түүхий ажиллагааг админд үзүүлэхгүй (зөвхөн үр дүн нь тест/дүнгээр гарна)
-    const shown = seChat().filter((m) => m.role !== 'AI1' && m.role !== 'AI2');
-    return { ok: true, state: st, inSchedule: seInSchedule(st), chat: shown.slice(-80), sim: seSim(), staticMode: true };
-  }
-  if (path === '/api/admin/ai/state' && method === 'POST') {
-    const st = seAiState();
-    const wasOn = !!st.enabled;
-    if (typeof body.enabled === 'boolean') st.enabled = body.enabled;
-    if (body.start) st.start = String(body.start).slice(0, 5);
-    if (body.end) st.end = String(body.end).slice(0, 5);
-    if (body.extraEmail != null) st.extraEmail = String(body.extraEmail).trim();
-    if (body.simLogin != null) st.simLogin = String(body.simLogin).trim();
-    seSaveAiState(st);
-    // Зөвхөн ON/OFF өөрчлөгдсөн үед л мэдэгдэл нэмнэ (ажил цаг/имэйл/нэр солих бүрт давтдаг байсан)
-    if (typeof body.enabled === 'boolean' && !!st.enabled !== wasOn) {
-      sePushChat('SYS', st.enabled ? ('AI асаалаа ' + st.start + '–' + st.end) : 'AI унтраалаа');
+  if (path === '/api/admin/teachers/update' && method === 'POST') {
+    if (!(await seCheckPassword(String(body.adminPassword || '')))) throw err('Админы нууц үг буруу', 400);
+    const oldLogin = String(body.oldLogin || '').trim();
+    const list = SE_LS.get('se_static_teachers', []);
+    const i = list.findIndex((t) => t && (t.login === oldLogin || t.email === oldLogin));
+    if (i < 0) throw err('Багш олдсонгүй', 404);
+    const merged = await seTeacherCredsUpdate(list[i], body);
+    if (list.some((t, k) => k !== i && t && (t.login === merged.login || t.email === merged.email))) {
+      throw err('Энэ нэвтрэх нэр аль хэдийн байна', 400);
     }
-    return { ok: true, state: st };
+    const saved = Object.assign({}, merged);
+    delete saved.warning;
+    delete saved.password; // нууц үг локалд хадгалагдахгүй
+    list[i] = Object.assign({}, list[i], saved, { updatedAt: new Date().toISOString() });
+    SE_LS.set('se_static_teachers', list);
+    return { ok: true, teacher: list[i], warning: merged.warning || '' };
   }
-  if (path === '/api/admin/ai/command' && method === 'POST') {
-    const text = String(body.text || '').trim();
-    if (!text) throw err('хоосон');
-    const st = seAiState();
-    st.commands = st.commands || [];
-    st.commands.push(text.slice(0, 500));
-    seSaveAiState(st);
-    sePushChat('ADMIN', text, { kind: 'inbox' });
-    return { ok: true };
-  }
-  if (path === '/api/admin/ai/email' && method === 'POST') {
-    const extra = String(body.to || seAiState().extraEmail || '').trim();
-    const msg = String(body.message || seCompactLogs(40));
-    const results = await seSendEmail([extra], String(body.subject || 'SmartEXAM мэдэгдэл'), msg);
-    return { ok: true, results: results };
+  if (path.indexOf('/api/admin/teachers/') === 0 && method === 'DELETE') {
+    if (!(await seCheckPassword(String(body.adminPassword || '')))) throw err('Админы нууц үг буруу', 400);
+    const login = decodeURIComponent(path.split('/').pop());
+    const list = SE_LS.get('se_static_teachers', []);
+    const rec = list.find((t) => t && (t.login === login || t.email === login));
+    let deleted = false;
+    if (rec) {
+      const pw = String(body.currentPassword || '');
+      if (!pw) throw err('Устгахын тулд одоогийн нууц үгийг оруулна уу', 400);
+      if (pw) {
+        try {
+          const a = await seFbAuth('signInWithPassword', { email: String(rec.email || teacherLoginToEmail(rec.login)), password: pw, returnSecureToken: true });
+          await seFbAuth('delete', { idToken: a.idToken });
+          deleted = true;
+        } catch (e) { console.warn('auth delete failed', e && e.message); }
+      }
+    }
+    SE_LS.set('se_static_teachers', list.filter((t) => t && t.login !== login && t.email !== login));
+    return { ok: true, firebaseDeleted: deleted };
   }
   throw err('not found', 404);
 }
@@ -9761,16 +10155,11 @@ function AdminApp() {
   const [tok, setTok] = useState(() => sessionStorage.getItem('se_admin_tok') || '');
   const [pass, setPass] = useState('');
   const [err, setErr] = useState('');
-  const [tab, setTab] = useState('ai');
   const [teachers, setTeachers] = useState([]);
   const [form, setForm] = useState({ login: '', password: '', name: '' });
-  const [ai, setAi] = useState(null);
-  const [cmd, setCmd] = useState('');
-  const [mailTo, setMailTo] = useState('');
-  const [mailMsg, setMailMsg] = useState('');
-  const [simLogin, setSimLogin] = useState('');
   const [staticMode, setStaticMode] = useState(false);
-  const chatRef = useRef(null);
+  // Багш засах modal: { old, login, password, name, currentPassword, adm, unlocked, busy, msg }
+  const [editT, setEditT] = useState(null);
 
   useEffect(() => {
     let dead = false;
@@ -9781,32 +10170,14 @@ function AdminApp() {
   const load = async () => {
     const t = await adminApi('/api/admin/teachers');
     setTeachers(t.teachers || []);
-    const a = await adminApi('/api/admin/ai/state');
-    setAi(a);
-    if (a && a.sim) seAiPublishFromSim(a.sim);
-    if (a.state && a.state.extraEmail != null) setMailTo(a.state.extraEmail);
-    if (a.state && a.state.simLogin != null) setSimLogin(a.state.simLogin);
   };
 
   useEffect(() => {
     if (!tok) return;
     load().catch(() => { setTok(''); sessionStorage.removeItem('se_admin_tok'); });
     const id = setInterval(() => { load().catch(() => {}); }, 4000);
-    // GitHub Pages горим: server байхгүй тул AI1–AI4 ажилтнууд энэ хуудас дээр ажиллана
-    let stopped = false;
-    let tickId = null;
-    seIsStatic().then((isStatic) => {
-      if (stopped || !isStatic) return;
-      const run = () => seStaticTick().catch(() => {});
-      run();
-      tickId = setInterval(run, 15000);
-    });
-    return () => { stopped = true; clearInterval(id); if (tickId) clearInterval(tickId); };
+    return () => clearInterval(id);
   }, [tok]);
-
-  useEffect(() => {
-    if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
-  }, [ai && ai.chat && ai.chat.length]);
 
   const login = async () => {
     setErr('');
@@ -9840,10 +10211,55 @@ function AdminApp() {
     );
   }
 
-  const st = (ai && ai.state) || {};
-  const saveAi = async (patch) => {
-    await adminApi('/api/admin/ai/state', { method: 'POST', body: JSON.stringify(patch) });
-    await load();
+  /* ── Багш засах / устгах (админы нууц үгээр баталгаажуулна) ── */
+  const openEdit = (t) => setEditT({ old: t, login: t.login || '', password: '', name: t.name || '', currentPassword: '', adm: '', tiim: '', unlocked: false, busy: false, msg: '' });
+  const patchEdit = (p) => setEditT((s) => (s ? Object.assign({}, s, p) : s));
+
+  const unlockEdit = async () => {
+    if (!editT || !editT.adm) return;
+    patchEdit({ busy: true, msg: '' });
+    try {
+      const d = await adminApi('/api/admin/login', { method: 'POST', body: JSON.stringify({ password: editT.adm }) });
+      if (!d.ok) { patchEdit({ busy: false, msg: d.error || 'Нууц үг буруу' }); return; }
+      sessionStorage.setItem('se_admin_tok', d.token);
+      setTok(d.token);
+      patchEdit({ busy: false, unlocked: true, msg: '' });
+    } catch (e) {
+      patchEdit({ busy: false, msg: (e && e.message) || 'Алдаа' });
+    }
+  };
+
+  const saveEdit = async () => {
+    if (!editT) return;
+    if (!editT.adm) { patchEdit({ msg: 'Админы нууц үг оруулна уу' }); return; }
+    patchEdit({ busy: true, msg: '' });
+    try {
+      const r = await adminApi('/api/admin/teachers/update', { method: 'POST', body: JSON.stringify({
+        oldLogin: editT.old.login, login: editT.login, password: editT.password, name: editT.name,
+        currentPassword: editT.currentPassword, adminPassword: editT.adm
+      }) });
+      setEditT(null);
+      await load();
+      alert(r && r.warning ? ('Хадгаллаа, гэхдээ: ' + r.warning) : ('Хадгаллаа: ' + editT.login));
+    } catch (e) {
+      patchEdit({ busy: false, msg: (e && e.message) || 'Алдаа' });
+    }
+  };
+
+  const deleteEdit = async () => {
+    if (!editT) return;
+    if (!editT.adm) { patchEdit({ msg: 'Админы нууц үг оруулна уу' }); return; }
+    if (String(editT.tiim || '').trim().toUpperCase() !== 'TIIM') { patchEdit({ msg: 'Устгахын тулд «TIIM» гэж бичнэ үү' }); return; }
+    if (!editT.currentPassword) { patchEdit({ msg: 'Устгахын тулд багшийн одоогийн нууц үгийг оруулна уу' }); return; }
+    patchEdit({ busy: true, msg: '' });
+    try {
+      const r = await adminApi('/api/admin/teachers/' + encodeURIComponent(editT.old.login), { method: 'DELETE', body: JSON.stringify({ adminPassword: editT.adm, currentPassword: editT.currentPassword }) });
+      setEditT(null);
+      await load();
+      alert(r && r.firebaseDeleted ? 'Устгалаа (Firebase аккаунт ч хамт устлаа).' : 'Жагсаалтаас устгалаа. Firebase аккаунт хэвээр байж болно.');
+    } catch (e) {
+      patchEdit({ busy: false, msg: (e && e.message) || 'Алдаа' });
+    }
   };
 
   return (
@@ -9852,87 +10268,97 @@ function AdminApp() {
         <h1 style={{fontFamily:'Outfit',margin:'8px 0 4px'}}>Админы удирдлага</h1>
         <button className="btn btn-outline btn-sm" onClick={() => { sessionStorage.removeItem('se_admin_tok'); setTok(''); }}>Гарах</button>
       </div>
-      <p style={{color:'var(--text2)',margin:'0 0 14px'}}>Багш бүртгэл · AI хяналт · group chat. Энэ холбоос багш/сурагчид харагдахгүй.</p>
-      <div className="seg" style={{marginBottom:14}}>
-        <button className={'seg-b' + (tab === 'ai' ? ' on' : '')} onClick={() => setTab('ai')}>AI хяналт</button>
-        <button className={'seg-b' + (tab === 'teachers' ? ' on' : '')} onClick={() => setTab('teachers')}>Багш нар</button>
-      </div>
+      <p style={{color:'var(--text2)',margin:'0 0 14px'}}>Багш бүртгэл. Энэ холбоос багш/сурагчид харагдахгүй.</p>
 
-      {tab === 'teachers' && (
-        <div className="card"><div className="card-body">
-          <div className="form-label">Шинэ багш үүсгэх</div>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))',gap:8}}>
-            <input className="form-input" placeholder="Нэвтрэх нэр" value={form.login} onChange={e => setForm({...form, login:e.target.value})} />
-            <input className="form-input" placeholder="Нууц үг (6+)" value={form.password} onChange={e => setForm({...form, password:e.target.value})} />
-            <input className="form-input" placeholder="Нэр" value={form.name} onChange={e => setForm({...form, name:e.target.value})} />
-            <button className="btn btn-primary" onClick={async () => {
-              try {
-                await adminApi('/api/admin/teachers', { method: 'POST', body: JSON.stringify(form) });
-                setForm({ login:'', password:'', name:'' });
-                await load();
-                alert('Багш үүслээ. Тэр нэр/нууц үгээр шууд нэвтэрнэ.');
-              } catch (e) { alert(e.message); }
-            }}>Үүсгэх</button>
+      <div className="card"><div className="card-body">
+        <div className="form-label">Шинэ багш үүсгэх</div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))',gap:8}}>
+          <input className="form-input" placeholder="Нэвтрэх нэр" value={form.login} onChange={e => setForm({...form, login:e.target.value})} />
+          <input className="form-input" placeholder="Нууц үг (6+)" value={form.password} onChange={e => setForm({...form, password:e.target.value})} />
+          <input className="form-input" placeholder="Нэр" value={form.name} onChange={e => setForm({...form, name:e.target.value})} />
+          <button className="btn btn-primary" onClick={async () => {
+            try {
+              await adminApi('/api/admin/teachers', { method: 'POST', body: JSON.stringify(form) });
+              setForm({ login:'', password:'', name:'' });
+              await load();
+              alert('Багш үүслээ. Тэр нэр/нууц үгээр шууд нэвтэрнэ.');
+            } catch (e) { alert(e.message); }
+          }}>Үүсгэх</button>
+        </div>
+        <div className="form-hint" style={{marginTop:8}}>Багш өөрөө бүртгүүлдэггүй — зөвхөн энд үүсгэсэн нэвтрэх нэр/нууц үгээр л нэвтэрнэ.</div>
+        <table className="tbl" style={{marginTop:14}}><thead><tr><th>Нэвтрэх нэр</th><th>Нэр</th><th>UID</th><th></th></tr></thead>
+          <tbody>{teachers.map(t => <tr key={t.login}><td>{t.login}</td><td>{t.name}</td><td style={{fontSize:'.75rem'}}>{t.uid}</td><td style={{whiteSpace:'nowrap'}}><button className="btn btn-outline btn-sm" onClick={() => openEdit(t)}>✏️ Засах</button></td></tr>)}</tbody>
+        </table>
+      </div></div>
+
+      {editT && (
+        <div className="modal-overlay" style={{zIndex:1200}}>
+          <div className="modal" style={{maxWidth:460}}>
+            <div className="modal-head">
+              <div style={{fontWeight:800,fontFamily:'Outfit'}}>Багш засах · {editT.old.login}</div>
+              <button className="btn btn-ghost btn-sm" onClick={() => setEditT(null)}>✕</button>
+            </div>
+            <div className="modal-body">
+              {!editT.unlocked ? (
+                <div className="form-group">
+                  <label className="form-label">Админы нууц үг</label>
+                  <input className="form-input" type="password" autoFocus value={editT.adm} placeholder="nimda321"
+                    onChange={e => patchEdit({ adm: e.target.value })}
+                    onKeyDown={e => e.key === 'Enter' && unlockEdit()} />
+                </div>
+              ) : (
+                <>
+                  <div className="form-group">
+                    <label className="form-label">Нэвтрэх нэр</label>
+                    <input className="form-input" value={editT.login} onChange={e => patchEdit({ login: e.target.value })} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Нууц үг</label>
+                    <input className="form-input" type="text" value={editT.password} placeholder="6+ тэмдэгт"
+                      onChange={e => patchEdit({ password: e.target.value })} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Нэр</label>
+                    <input className="form-input" value={editT.name} onChange={e => patchEdit({ name: e.target.value })} />
+                  </div>
+                  {!editT.old.password && (
+                    <div className="form-group">
+                      <label className="form-label">Одоогийн нууц үг (нэр, нууц үг солих, устгахад шаардлагатай)</label>
+                      <input className="form-input" type="password" value={editT.currentPassword}
+                        onChange={e => patchEdit({ currentPassword: e.target.value })} />
+                    </div>
+                  )}
+                  <div className="form-group">
+                    <label className="form-label">Админы нууц үг (баталгаажуулах)</label>
+                    <input className="form-input" type="password" placeholder="заавал — nimda321" value={editT.adm}
+                      onChange={e => patchEdit({ adm: e.target.value })} />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Устгахын тулд «TIIM» гэж бичнэ үү</label>
+                    <input className="form-input" placeholder="TIIM" value={editT.tiim}
+                      onChange={e => patchEdit({ tiim: e.target.value })} />
+                  </div>
+                  <div className="form-hint">{staticMode ? 'GitHub Pages горим: өөрчлөлт Firebase Auth дээр бодитоор хийгдэнэ.' : 'LAN сервер горим: өөрчлөлт server.js-ээр дамжиж Firebase Auth дээр хийгдэнэ.'} Нэвтрэх нэрийг солиход Firebase шинэ аккаунт үүсгэдэг тул UID шинээр үүснэ (хуучин UID-ийн тестүүд хэвээр үлдэнэ).</div>
+                </>
+              )}
+              {editT.msg && <div className="form-error" style={{marginTop:8}}>⚠ {editT.msg}</div>}
+            </div>
+            <div className="modal-foot" style={{flexWrap:'wrap',gap:8}}>
+              {!editT.unlocked ? (
+                <>
+                  <button className="btn btn-outline" onClick={() => setEditT(null)}>Болих</button>
+                  <button className="btn btn-primary" onClick={unlockEdit} disabled={editT.busy || !editT.adm}>{editT.busy ? '⏳ ...' : 'Нээх'}</button>
+                </>
+              ) : (
+                <>
+                  <button className="btn btn-outline" onClick={() => setEditT(null)}>Болих</button>
+                  <button className="btn btn-outline" style={{borderColor:'#dc2626',color:'#dc2626'}} onClick={deleteEdit} disabled={editT.busy}>🗑 Устгах</button>
+                  <button className="btn btn-primary" onClick={saveEdit} disabled={editT.busy}>{editT.busy ? '⏳ ...' : '💾 Хадгалах'}</button>
+                </>
+              )}
+            </div>
           </div>
-          <div className="form-hint" style={{marginTop:8}}>Багш өөрөө бүртгүүлдэггүй — зөвхөн энд үүсгэсэн нэвтрэх нэр/нууц үгээр л нэвтэрнэ.</div>
-          <table className="tbl" style={{marginTop:14}}><thead><tr><th>Нэвтрэх нэр</th><th>Нэр</th><th>UID</th></tr></thead>
-            <tbody>{teachers.map(t => <tr key={t.login}><td>{t.login}</td><td>{t.name}</td><td style={{fontSize:'.75rem'}}>{t.uid}</td></tr>)}</tbody>
-          </table>
-        </div></div>
-      )}
-
-      {tab === 'ai' && (
-        <>
-          <div className="card" style={{marginBottom:12}}><div className="card-body">
-            <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
-              <label style={{fontWeight:800,display:'flex',gap:8,alignItems:'center'}}>
-                <input type="checkbox" checked={!!st.enabled} onChange={e => saveAi({ enabled: e.target.checked })} />
-                AI ажилтнууд ON
-              </label>
-              <span>Идэвхжих</span>
-              <input className="form-input" type="time" style={{width:130}} value={st.start || '08:00'} onChange={e => saveAi({ start: e.target.value })} />
-              <span>Дуусах</span>
-              <input className="form-input" type="time" style={{width:130}} value={st.end || '18:00'} onChange={e => saveAi({ end: e.target.value })} />
-              <span className={'badge ' + (ai && ai.inSchedule && st.enabled ? 'badge-blue' : 'badge-gray')}>{ai && ai.inSchedule && st.enabled ? 'ажиллаж байна' : 'хүлээлт'}</span>
-            </div>
-            <div style={{display:'flex',gap:8,marginTop:10,flexWrap:'wrap'}}>
-              <input className="form-input" style={{flex:1,minWidth:180}} placeholder="Симуляцийн багшийн нэвтрэх нэр"
-                value={simLogin} onChange={e => setSimLogin(e.target.value)}
-                onBlur={() => saveAi({ simLogin })} />
-              <input className="form-input" style={{flex:1,minWidth:180}} placeholder="Нэмэлт имэйл"
-                value={mailTo} onChange={e => setMailTo(e.target.value)}
-                onBlur={() => saveAi({ extraEmail: mailTo })} />
-            </div>
-            <div className="form-hint">AI1+AI2 = багш/сурагч (KEY1). AI3 аудит + AI4 туслах (KEY2). Зөвхөн энд заасан симуляцийн аккаунт дээр ажиллана.{staticMode ? ' · GitHub Pages горим: server байхгүй тул AI ажилтнууд энэ хуудас нээлттэй байхад ажиллана, мэдээлэл энэ төхөөрөмж дээр хадгалагдана.' : ''}</div>
-          </div></div>
-
-          <div className="card" style={{marginBottom:12}}><div className="card-header"><div className="card-title">Group chat · AI ажилтнууд</div></div>
-            <div className="card-body">
-              <div className="admin-chat" ref={chatRef}>
-                {(ai && ai.chat || []).map(m => (
-                  <div className="row" key={m.id}><span className="who">{m.role}</span><span style={{opacity:.55,marginRight:8}}>{(m.t||'').slice(11,19)}</span>{m.text}</div>
-                ))}
-              </div>
-              <div style={{display:'flex',gap:8,marginTop:10}}>
-                <input className="form-input" placeholder='AI4-д даалгавар: жишээ нь "10 тест үүсгэ"' value={cmd} onChange={e => setCmd(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && cmd && adminApi('/api/admin/ai/command', { method:'POST', body: JSON.stringify({ text: cmd }) }).then(() => { setCmd(''); load(); })} />
-                <button className="btn btn-violet" onClick={async () => { if (!cmd) return; await adminApi('/api/admin/ai/command', { method:'POST', body: JSON.stringify({ text: cmd }) }); setCmd(''); await load(); }}>Илгээх</button>
-              </div>
-            </div>
-          </div>
-
-          <div className="card"><div className="card-header"><div className="card-title">Мэдэгдэл / имэйл</div></div>
-            <div className="card-body">
-              <input className="form-input" placeholder="Нэмэлт имэйл" value={mailTo} onChange={e => setMailTo(e.target.value)} style={{marginBottom:8}} />
-              <textarea className="form-textarea" placeholder="Мэдэгдлийн текст" value={mailMsg} onChange={e => setMailMsg(e.target.value)} />
-              <button className="btn btn-green" style={{marginTop:8}} onClick={async () => {
-                await saveAi({ extraEmail: mailTo });
-                const r = await adminApi('/api/admin/ai/email', { method:'POST', body: JSON.stringify({ to: mailTo, message: mailMsg || 'SmartEXAM мэдэгдэл' }) });
-                alert('Илгээлт: ' + JSON.stringify(r.results));
-              }}>nbaenkhbat@gmail.com + нэмэлт рүү илгээх</button>
-            </div>
-          </div>
-        </>
+        </div>
       )}
     </div>
   );
@@ -9949,9 +10375,9 @@ function App() {
   );
   const [exams, setExams] = useLS('se_exams', []);
   const [submissions, setSubmissions] = useLS('se_submissions', []);
-  // AI1/AI2-ийн бодит ажил (шинэ тест, сурагчийн хариулт) localStorage-д бичигдсэнийг шинэчилж авна
+  // Бусад таб/цонхноос шалгалт, үр дүн өөрчлөгдвөл энэ хуудсанд шинэчилнэ
   useEffect(() => {
-    const applyAiWork = () => {
+    const applyStored = () => {
       try {
         const raw = localStorage.getItem('se_exams');
         const parsed = raw ? JSON.parse(raw) : [];
@@ -9963,12 +10389,8 @@ function App() {
         if (Array.isArray(parsed)) setSubmissions((prev) => (JSON.stringify(prev) === raw ? prev : parsed));
       } catch {}
     };
-    window.addEventListener('se_ai_work', applyAiWork);
-    window.addEventListener('storage', applyAiWork);
-    return () => {
-      window.removeEventListener('se_ai_work', applyAiWork);
-      window.removeEventListener('storage', applyAiWork);
-    };
+    window.addEventListener('storage', applyStored);
+    return () => window.removeEventListener('storage', applyStored);
   }, [setExams, setSubmissions]);
   const [restoring, setRestoring] = useState(false);
   const restoreExams = useCallback(async (silent) => {

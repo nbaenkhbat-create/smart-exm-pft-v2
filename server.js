@@ -58,33 +58,11 @@ const FILES = {
   secrets: secretsPath,
   sessions: path.join(DATA, 'sessions.json'),
   teachers: path.join(DATA, 'teachers.json'),
-  ai: path.join(DATA, 'ai-state.json'),
-  chat: path.join(DATA, 'ai-chat.json'),
-  sim: path.join(DATA, 'sim-workspace.json'),
-  reports: path.join(DATA, 'ai-reports.json')
 };
 
 function secrets() { return readJson(FILES.secrets, {}); }
 function sessions() { return readJson(FILES.sessions, {}); }
 function teachers() { return readJson(FILES.teachers, []); }
-function aiState() {
-  return readJson(FILES.ai, {
-    enabled: false,
-    start: '08:00',
-    end: '18:00',
-    extraEmail: '',
-    simLogin: '',
-    simUid: '',
-    lastTick: 0,
-    lastReportAt: 0,
-    commands: []
-  });
-}
-function chatLog() { return readJson(FILES.chat, []); }
-function simWs() {
-  return readJson(FILES.sim, { exams: [], assignments: [], studentWork: [], audits: [] });
-}
-
 const tokens = sessions();
 
 function lanIps() {
@@ -176,194 +154,6 @@ function authAdmin(req) {
   return true;
 }
 
-function pushChat(role, text, extra) {
-  const list = chatLog();
-  list.push(Object.assign({
-    id: crypto.randomBytes(6).toString('hex'),
-    t: new Date().toISOString(),
-    role,
-    text: String(text || '').slice(0, 4000)
-  }, extra || {}));
-  while (list.length > 400) list.shift();
-  writeJson(FILES.chat, list);
-  return list[list.length - 1];
-}
-
-function inSchedule(st) {
-  const now = new Date();
-  const hm = now.getHours() * 60 + now.getMinutes();
-  const [sh, sm] = String(st.start || '00:00').split(':').map(Number);
-  const [eh, em] = String(st.end || '23:59').split(':').map(Number);
-  const a = (sh || 0) * 60 + (sm || 0);
-  const b = (eh || 23) * 60 + (em || 59);
-  if (a <= b) return hm >= a && hm <= b;
-  return hm >= a || hm <= b;
-}
-
-// Groq дээд түвшинд загварууд хулагддаг тул (жишээ: llama-3.1-8b-instant аль хэдийн алга)
-// нэг нь алдаа өгвөл дараагийн бэлэн загвар руу автоматаар шилжинэ.
-const GROQ_MODELS = ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b'];
-let groqModelIndex = 0;
-
-/* data/secrets.json дахь түлхүүрүүд хүчингүй болоход (401) зогсохгүйн тулд
-   хуудас дээр ашиглагддаж буй ажиллагаатай түлхүүрийг нөөцөөр авна. */
-let pageKeyCache = null;
-function pageGroqKey() {
-  if (pageKeyCache) return pageKeyCache;
-  try {
-    const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
-    const line = String(html).split('\n').find((l) => l.indexOf('const SCAN_GROQ_KEY = ') === 0);
-    if (line) pageKeyCache = Function(line.replace('const SCAN_GROQ_KEY = ', 'return '))();
-  } catch (e) { console.warn('page key decode:', e.message); }
-  return pageKeyCache || '';
-}
-
-async function groqChat(which, messages, maxTok) {
-  const s = secrets();
-  const primary = which === 2 ? s.groqKey2 : s.groqKey1;
-  const secondary = which === 2 ? s.groqKey1 : s.groqKey2;
-  const keys = Array.from(new Set([primary, secondary, pageGroqKey()].filter(Boolean)));
-  if (!keys.length) throw new Error('GROQ key missing');
-  let lastErr = null;
-  for (let ki = 0; ki < keys.length; ki++) {
-    for (let attempt = 0; attempt < GROQ_MODELS.length; attempt++) {
-      const model = GROQ_MODELS[(groqModelIndex + attempt) % GROQ_MODELS.length];
-      const r = await httpsJson('POST', 'https://api.groq.com/openai/v1/chat/completions', {
-        Authorization: 'Bearer ' + keys[ki]
-      }, {
-        model,
-        temperature: 0.3,
-        max_tokens: maxTok || 280,
-        messages
-      });
-      const msg = r.data && r.data.choices && r.data.choices[0] && r.data.choices[0].message;
-      if (r.status < 400 && msg && msg.content) {
-        groqModelIndex = (groqModelIndex + attempt) % GROQ_MODELS.length;
-        return msg.content;
-      }
-      lastErr = new Error((r.data && r.data.error && r.data.error.message) || ('Groq ' + r.status));
-      // 401/403 → түлхүүр солих; 404/400 → загвар солих; бусад → дараагийн түлхүүр рүү
-      if (r.status === 401 || r.status === 403) break;
-      if (r.status !== 404 && r.status !== 400) break;
-    }
-  }
-  throw lastErr || new Error('Groq алдаа');
-}
-
-async function sendReportEmail(toList, subject, message) {
-  const s = secrets();
-  const addrs = Array.from(new Set([s.reportEmail, ...toList].filter(Boolean)));
-  const results = [];
-  for (const to of addrs) {
-    try {
-      const r = await httpsJson('POST', 'https://formsubmit.co/ajax/' + encodeURIComponent(to), {
-        Accept: 'application/json'
-      }, {
-        name: 'SmartEXAM AI',
-        _subject: subject,
-        message
-      });
-      results.push({ to, ok: r.status < 400, status: r.status });
-    } catch (e) {
-      results.push({ to, ok: false, error: e.message });
-    }
-  }
-  const reports = readJson(FILES.reports, []);
-  reports.push({ t: new Date().toISOString(), subject, message: message.slice(0, 8000), results });
-  writeJson(FILES.reports, reports.slice(-80));
-  return results;
-}
-
-function compactLogs(n) {
-  // AI1/AI2-ийн түүхий текстийг хасна: тэдгээр нь AI3-д бүрэн хэлбэрээр тусгайлан илгээгддэг бөгөөд
-  // энд 180 тэмдэгтээр тасдагдаж хувирах тул AI3 "JSON тасдагдсан" гэж буруу дүгнэдэг байв.
-  return chatLog()
-    .filter((m) => m.role !== 'AI1' && m.role !== 'AI2')
-    .slice(-n)
-    .map((m) => m.role + ': ' + String(m.text).replace(/\s+/g, ' ').slice(0, 180)).join('\n');
-}
-
-async function workerTick() {
-  const st = aiState();
-  if (!st.enabled || !inSchedule(st)) return;
-  const now = Date.now();
-  if (now - (st.lastTick || 0) < 40000) return; // rate limit
-  st.lastTick = now;
-  writeJson(FILES.ai, st);
-
-  const ws = simWs();
-  const sys = 'MN school exam sim. Reply compact MN/EN. Max 80 words. No secrets.';
-  const cmd = (st.commands || []).shift();
-  if (cmd) writeJson(FILES.ai, st);
-
-  try {
-    // AI4 first if admin queued a command
-    if (cmd) {
-      const out = await groqChat(2, [
-        { role: 'system', content: sys + ' You are AI4 admin secretary. Do the task or report AI1-3 status.' },
-        { role: 'user', content: ('CMD:' + cmd + '\nLOG:\n' + compactLogs(8)).slice(0, 1200) }
-      ], 220);
-      pushChat('AI4', out, { kind: 'command' });
-    }
-
-    const exams = ws.exams || [];
-    const lastExam = exams[exams.length - 1];
-
-    const a1 = await groqChat(1, [
-      { role: 'system', content: 'You are AI1, an English teacher. Output ONLY one complete ASCII-JSON object: no markdown, no commentary, no Cyrillic, plain English text only. Shape: {"title":"...","q":[{"t":"question text","type":"mcq","opts":["a","b","c","d"],"ans":"exact option text"}]}. Use type mcq (4 opts) or blank (opts:[]). Exactly 5 questions. Every JSON string and bracket must be closed.' },
-      { role: 'user', content: 'Make a 5-question English practice set. Rotate topic: vocabulary / gerunds / so that / tenses.' }
-    ], 700);
-    pushChat('AI1', a1, { kind: 'teach' });
-    let exam = null;
-    try {
-      const m = a1.match(/\{[\s\S]*\}/);
-      exam = m ? JSON.parse(m[0]) : { title: 'AI дасгал', q: [] };
-    } catch { exam = { title: 'AI дасгал', raw: a1.slice(0, 400) }; }
-    exam.id = 'sim-' + Date.now();
-    exam.at = new Date().toISOString();
-    exam.owner = st.simLogin || 'sim';
-    ws.exams = (ws.exams || []).slice(-20).concat([exam]);
-
-    const a2 = await groqChat(1, [
-      { role: 'system', content: 'You are AI2, a student. Reply ONLY with a complete ASCII-JSON object {"answers":[...]} — one answer per question, in order, matching each option text exactly. No markdown, no Cyrillic, no extra text.' },
-      { role: 'user', content: JSON.stringify({ title: exam.title, q: (exam.q || []).map((q) => ({ t: q.t, type: q.type, opts: q.opts })) }).slice(0, 1600) }
-    ], 400);
-    pushChat('AI2', a2, { kind: 'student' });
-    ws.studentWork = (ws.studentWork || []).slice(-20).concat([{ examId: exam.id, a2, at: exam.at }]);
-
-    const a3 = await groqChat(2, [
-      { role: 'system', content: sys + ' You are AI3 auditor. Find bugs/unclear text. JSON {"bugs":[],"ideas":[]}' },
-      { role: 'user', content: ('AI1:\n' + a1 + '\nAI2:\n' + a2 + '\nLOG:\n' + compactLogs(6)).slice(0, 1400) }
-    ], 240);
-    pushChat('AI3', a3, { kind: 'audit' });
-    ws.audits = (ws.audits || []).slice(-20).concat([{ at: exam.at, a3 }]);
-    writeJson(FILES.sim, ws);
-  } catch (e) {
-    pushChat('SYS', 'AI алдаа: ' + (e.message || e), { kind: 'error' });
-  }
-
-  // End-of-window report once
-  const st2 = aiState();
-  const [eh, em] = String(st2.end || '18:00').split(':').map(Number);
-  const nowD = new Date();
-  const endMin = (eh || 18) * 60 + (em || 0);
-  const hm = nowD.getHours() * 60 + nowD.getMinutes();
-  const dayKey = nowD.toISOString().slice(0, 10);
-  if (hm >= endMin && st2.lastReportAt !== dayKey && (ws.exams || []).length) {
-    const body = 'SmartEXAM AI өдрийн тайлан ' + dayKey + '\n\n' + compactLogs(30);
-    try {
-      await sendReportEmail([st2.extraEmail], 'SmartEXAM AI тайлан ' + dayKey, body);
-      pushChat('SYS', 'Тайлан имэйл илгээлээ.', { kind: 'mail' });
-    } catch (e) {
-      pushChat('SYS', 'Имэйл алдаа: ' + e.message, { kind: 'error' });
-    }
-    st2.lastReportAt = dayKey;
-    writeJson(FILES.ai, st2);
-  }
-}
-
-setInterval(() => { workerTick().catch((e) => console.warn('tick', e.message)); }, 15000);
-
 async function handleApi(req, res, url) {
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
@@ -438,59 +228,112 @@ async function handleApi(req, res, url) {
       return json(res, 500, { ok: false, error: e.message });
     }
     const list = teachers();
+    // Нууц үгийг сервер файлд ХАДГАЛАХГҮЙ — устгах/солиход админ одоогийн нууц үгийг бичнэ.
     list.push({ login, email, name, uid, createdAt: new Date().toISOString() });
     writeJson(FILES.teachers, list);
     return json(res, 200, { ok: true, email, uid });
   }
 
+  if (p === '/api/admin/teachers/update' && req.method === 'POST') {
+    const body = await readBody(req);
+    const s = secrets();
+    if (String(body.adminPassword || '') !== String(s.adminPassword || 'nimda321')) {
+      return json(res, 400, { ok: false, error: 'Админы нууц үг буруу' });
+    }
+    const list = teachers();
+    const oldLogin = String(body.oldLogin || '').trim();
+    const i = list.findIndex((t) => t && (t.login === oldLogin || t.email === oldLogin));
+    if (i < 0) return json(res, 404, { ok: false, error: 'Багш олдсонгүй' });
+    const rec = list[i];
+    const newLogin = String(body.login || rec.login || '').trim();
+    const newName = String(body.name || rec.name || newLogin).trim().slice(0, 80);
+    const oldEmail = String(rec.email || teacherEmail(rec.login)).toLowerCase();
+    const newEmail = teacherEmail(newLogin);
+    const newPass = String(body.password || '');
+    const oldPass = String(body.currentPassword || '');
+    const emailChanged = !!newEmail && newEmail !== oldEmail;
+    const passChanged = !!newPass && newPass !== String(rec.password || '');
+    if (!newLogin) return json(res, 400, { ok: false, error: 'Нэвтрэх нэр хоосон' });
+    if (newPass && newPass.length < 6) return json(res, 400, { ok: false, error: 'Шинэ нууц үг 6+ тэмдэгт байх ёстой' });
+    if (list.some((t, k) => k !== i && t && (t.login === newLogin || t.email === newEmail))) {
+      return json(res, 400, { ok: false, error: 'Энэ нэвтрэх нэр аль хэдийн байна' });
+    }
+    let uid = rec.uid || '';
+    let warning = '';
+    try {
+      if (emailChanged || passChanged) {
+        if (!oldPass) return json(res, 400, { ok: false, error: 'Одоогийн нууц үгийг оруулна уу' });
+        const signIn = await httpsJson('POST', 'https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=' + encodeURIComponent(s.firebaseApiKey), {},
+          { email: oldEmail, password: oldPass, returnSecureToken: true });
+        if (signIn.status >= 400) {
+          const msg = (signIn.data && signIn.data.error && signIn.data.error.message) || 'Алдаа';
+          return json(res, 400, { ok: false, error: 'Одоогийн нууц үг буруу: ' + msg });
+        }
+        uid = signIn.data.localId || uid;
+        if (!emailChanged) {
+          const up = await httpsJson('POST', 'https://identitytoolkit.googleapis.com/v1/accounts:update?key=' + encodeURIComponent(s.firebaseApiKey), {},
+            { idToken: signIn.data.idToken, returnSecureToken: true, password: newPass, displayName: newName });
+          if (up.status >= 400) {
+            const msg = (up.data && up.data.error && up.data.error.message) || 'Firebase update алдаа';
+            return json(res, 400, { ok: false, error: msg });
+          }
+          uid = (up.data && up.data.localId) || uid;
+        } else {
+          // Firebase нь нэвтрэх имэйлийг шууд солихыг зөвшөөрдөггүй (шинэ имэйл баталгаажуулалт шаардана),
+          // тиймээс шинэ аккаунт үүсгээд хуучныг устгана. UID шинээр үүснэ.
+          const pw = newPass || oldPass;
+          const su = await httpsJson('POST', 'https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=' + encodeURIComponent(s.firebaseApiKey), {},
+            { email: newEmail, password: pw, returnSecureToken: true });
+          if (su.status >= 400) {
+            const msg = (su.data && su.data.error && su.data.error.message) || 'Алдаа';
+            return json(res, 400, { ok: false, error: 'Шинэ нэвтрэх нэрээр аккаунт үүсгэсэнгүй: ' + msg });
+          }
+          await httpsJson('POST', 'https://identitytoolkit.googleapis.com/v1/accounts:update?key=' + encodeURIComponent(s.firebaseApiKey), {},
+            { idToken: su.data.idToken, returnSecureToken: true, displayName: newName });
+          const del = await httpsJson('POST', 'https://identitytoolkit.googleapis.com/v1/accounts:delete?key=' + encodeURIComponent(s.firebaseApiKey), {},
+            { idToken: signIn.data.idToken });
+          if (del.status >= 400) {
+            const msg = (del.data && del.data.error && del.data.error.message) || 'Алдаа';
+            warning = 'Хуучин аккаунтыг устгаж чадсангүй: ' + msg;
+          }
+          uid = su.data.localId || uid;
+        }
+      }
+    } catch (e) {
+      return json(res, 500, { ok: false, error: e.message });
+    }
+    list[i] = Object.assign({}, rec, { login: newLogin, name: newName, email: newEmail || oldEmail, uid, updatedAt: new Date().toISOString() });
+    writeJson(FILES.teachers, list);
+    return json(res, 200, { ok: true, teacher: { login: list[i].login, name: list[i].name, uid: list[i].uid }, warning });
+  }
+
   if (p.startsWith('/api/admin/teachers/') && req.method === 'DELETE') {
     const login = decodeURIComponent(p.split('/').pop());
-    writeJson(FILES.teachers, teachers().filter((t) => t.login !== login && t.email !== login));
-    return json(res, 200, { ok: true });
-  }
-
-  if (p === '/api/admin/ai/state' && req.method === 'GET') {
-    const st = aiState();
-    // AI1/AI2-ын түүхий ажиллагааг админд үзүүлэхгүй (зөвхөн үр дүн нь тест/дүнгээр гарна)
-    const shown = chatLog().filter((m) => m.role !== 'AI1' && m.role !== 'AI2');
-    return json(res, 200, { ok: true, state: st, inSchedule: inSchedule(st), chat: shown.slice(-80), sim: simWs() });
-  }
-
-  if (p === '/api/admin/ai/state' && req.method === 'POST') {
     const body = await readBody(req);
-    const st = aiState();
-    const wasOn = !!st.enabled;
-    if (typeof body.enabled === 'boolean') st.enabled = body.enabled;
-    if (body.start) st.start = String(body.start).slice(0, 5);
-    if (body.end) st.end = String(body.end).slice(0, 5);
-    if (body.extraEmail != null) st.extraEmail = String(body.extraEmail).trim();
-    if (body.simLogin != null) st.simLogin = String(body.simLogin).trim();
-    writeJson(FILES.ai, st);
-    // Зөвхөн ON/OFF өөрчлөгдсөн үед л мэдэгдэл нэмнэ (ажил цаг/имэйл/нэр солих бүрт давтаж байсан)
-    if (typeof body.enabled === 'boolean' && !!st.enabled !== wasOn) {
-      pushChat('SYS', st.enabled ? ('AI асаалаа ' + st.start + '–' + st.end) : 'AI унтраалаа');
+    const s = secrets();
+    if (String(body.adminPassword || '') !== String(s.adminPassword || 'nimda321')) {
+      return json(res, 400, { ok: false, error: 'Админы нууц үг буруу' });
     }
-    return json(res, 200, { ok: true, state: st });
-  }
-
-  if (p === '/api/admin/ai/command' && req.method === 'POST') {
-    const body = await readBody(req);
-    const text = String(body.text || '').trim();
-    if (!text) return json(res, 400, { ok: false, error: 'хоосон' });
-    const st = aiState();
-    st.commands = st.commands || [];
-    st.commands.push(text.slice(0, 500));
-    writeJson(FILES.ai, st);
-    pushChat('ADMIN', text, { kind: 'inbox' });
-    return json(res, 200, { ok: true });
-  }
-
-  if (p === '/api/admin/ai/email' && req.method === 'POST') {
-    const body = await readBody(req);
-    const extra = String(body.to || aiState().extraEmail || '').trim();
-    const msg = String(body.message || compactLogs(40));
-    const results = await sendReportEmail([extra], String(body.subject || 'SmartEXAM мэдэгдэл'), msg);
-    return json(res, 200, { ok: true, results });
+    const list = teachers();
+    const rec = list.find((t) => t && (t.login === login || t.email === login));
+    let deleted = false;
+    if (rec) {
+      const pw = String(body.currentPassword || '');
+      if (!pw) return json(res, 400, { ok: false, error: 'Устгахын тулд одоогийн нууц үгийг оруулна уу' });
+      if (pw) {
+        try {
+          const signIn = await httpsJson('POST', 'https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=' + encodeURIComponent(s.firebaseApiKey), {},
+            { email: rec.email || teacherEmail(rec.login), password: pw, returnSecureToken: true });
+          if (signIn.status < 400) {
+            const del = await httpsJson('POST', 'https://identitytoolkit.googleapis.com/v1/accounts:delete?key=' + encodeURIComponent(s.firebaseApiKey), {},
+              { idToken: signIn.data.idToken });
+            deleted = del.status < 400;
+          }
+        } catch (e) { console.warn('auth delete failed', e.message); }
+      }
+    }
+    writeJson(FILES.teachers, list.filter((t) => t.login !== login && t.email !== login));
+    return json(res, 200, { ok: true, firebaseDeleted: deleted });
   }
 
   json(res, 404, { error: 'not found' });
