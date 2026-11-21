@@ -65,6 +65,64 @@ function sessions() { return readJson(FILES.sessions, {}); }
 function teachers() { return readJson(FILES.teachers, []); }
 const tokens = sessions();
 
+/* form-urlencoded POST (securetoken API-д хэрэгтэй) */
+function httpsForm(urlStr, params) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(urlStr);
+    const body = new URLSearchParams(params || {}).toString();
+    const req = https.request({
+      method: 'POST',
+      hostname: u.hostname,
+      path: u.pathname + u.search,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Accept: 'application/json',
+        'Content-Length': Buffer.byteLength(body)
+      }
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        const raw = Buffer.concat(chunks).toString('utf8');
+        let data = {};
+        try { data = raw ? JSON.parse(raw) : {}; } catch { data = { raw }; }
+        resolve({ status: res.statusCode || 0, data });
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+/* Багшийн Firebase Auth аккаунтыг устгах: эхлээд хадгалсан refresh token-оор (нууц үг хэрэггүй),
+   болохгүй бол нууц үг өгөгдсөн үед нэвтэрч устгана. */
+async function deleteTeacherAuth(s, email, rec, password) {
+  if (rec && rec.rt) {
+    try {
+      const t = await httpsForm('https://securetoken.googleapis.com/v1/token?key=' + encodeURIComponent(s.firebaseApiKey),
+        { grant_type: 'refresh_token', refresh_token: rec.rt });
+      const idToken = t.data && (t.data.id_token || t.data.idToken);
+      if (t.status < 400 && idToken) {
+        const del = await httpsJson('POST', 'https://identitytoolkit.googleapis.com/v1/accounts:delete?key=' + encodeURIComponent(s.firebaseApiKey), {}, { idToken });
+        if (del.status < 400) return true;
+      }
+    } catch (e) { console.warn('refresh-token delete failed', e.message); }
+  }
+  if (password) {
+    try {
+      const signIn = await httpsJson('POST', 'https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=' + encodeURIComponent(s.firebaseApiKey), {},
+        { email, password, returnSecureToken: true });
+      if (signIn.status < 400) {
+        const del = await httpsJson('POST', 'https://identitytoolkit.googleapis.com/v1/accounts:delete?key=' + encodeURIComponent(s.firebaseApiKey), {},
+          { idToken: signIn.data.idToken });
+        return del.status < 400;
+      }
+    } catch (e) { console.warn('password delete failed', e.message); }
+  }
+  return false;
+}
+
 function lanIps() {
   const out = [];
   const ifs = os.networkInterfaces();
@@ -191,7 +249,7 @@ async function handleApi(req, res, url) {
   if (!authAdmin(req)) return json(res, 401, { ok: false, error: 'admin' });
 
   if (p === '/api/admin/teachers' && req.method === 'GET') {
-    return json(res, 200, { ok: true, teachers: teachers().map((t) => ({ login: t.login, email: t.email, name: t.name, uid: t.uid, createdAt: t.createdAt })) });
+    return json(res, 200, { ok: true, teachers: teachers().map((t) => ({ login: t.login, email: t.email, name: t.name, uid: t.uid, createdAt: t.createdAt })) }); // rt (refresh token) гадагш гаргахгүй
   }
 
   if (p === '/api/admin/teachers' && req.method === 'POST') {
@@ -204,6 +262,7 @@ async function handleApi(req, res, url) {
     const s = secrets();
     let uid = '';
     let reclaimed = false;
+    let rt = '';
     try {
       let idToken = '';
       const r = await httpsJson('POST',
@@ -224,10 +283,12 @@ async function handleApi(req, res, url) {
         }
         uid = si.data.localId;
         idToken = si.data.idToken;
+        rt = si.data.refreshToken || '';
         reclaimed = true;
       } else {
         uid = r.data.localId;
         idToken = r.data.idToken;
+        rt = r.data.refreshToken || '';
       }
       await httpsJson('POST',
         'https://identitytoolkit.googleapis.com/v1/accounts:update?key=' + encodeURIComponent(s.firebaseApiKey),
@@ -244,7 +305,7 @@ async function handleApi(req, res, url) {
     }
     const list = teachers();
     // Нууц үгийг сервер файлд ХАДГАЛАХГҮЙ — устгах/солиход админ одоогийн нууц үгийг бичнэ.
-    list.push({ login, email, name, uid, createdAt: new Date().toISOString() });
+    list.push({ login, email, name, uid, rt, createdAt: new Date().toISOString() });
     writeJson(FILES.teachers, list);
     return json(res, 200, { ok: true, email, uid, reclaimed });
   }
@@ -275,6 +336,7 @@ async function handleApi(req, res, url) {
     }
     let uid = rec.uid || '';
     let warning = '';
+    let authRt = '';
     try {
       if (emailChanged || passChanged) {
         if (!oldPass) return json(res, 400, { ok: false, error: 'Одоогийн нууц үгийг оруулна уу' });
@@ -285,6 +347,7 @@ async function handleApi(req, res, url) {
           return json(res, 400, { ok: false, error: 'Одоогийн нууц үг буруу: ' + msg });
         }
         uid = signIn.data.localId || uid;
+        authRt = signIn.data.refreshToken || '';
         if (!emailChanged) {
           const up = await httpsJson('POST', 'https://identitytoolkit.googleapis.com/v1/accounts:update?key=' + encodeURIComponent(s.firebaseApiKey), {},
             { idToken: signIn.data.idToken, returnSecureToken: true, password: newPass, displayName: newName });
@@ -293,6 +356,7 @@ async function handleApi(req, res, url) {
             return json(res, 400, { ok: false, error: msg });
           }
           uid = (up.data && up.data.localId) || uid;
+          authRt = (up.data && up.data.refreshToken) || authRt;
         } else {
           // Firebase нь нэвтрэх имэйлийг шууд солихыг зөвшөөрдөггүй (шинэ имэйл баталгаажуулалт шаардана),
           // тиймээс шинэ аккаунт үүсгээд хуучныг устгана. UID шинээр үүснэ.
@@ -312,12 +376,13 @@ async function handleApi(req, res, url) {
             warning = 'Хуучин аккаунтыг устгаж чадсангүй: ' + msg;
           }
           uid = su.data.localId || uid;
+          authRt = su.data.refreshToken || authRt;
         }
       }
     } catch (e) {
       return json(res, 500, { ok: false, error: e.message });
     }
-    list[i] = Object.assign({}, rec, { login: newLogin, name: newName, email: newEmail || oldEmail, uid, updatedAt: new Date().toISOString() });
+    list[i] = Object.assign({}, rec, { login: newLogin, name: newName, email: newEmail || oldEmail, uid, rt: (authRt || rec.rt || ''), updatedAt: new Date().toISOString() });
     writeJson(FILES.teachers, list);
     return json(res, 200, { ok: true, teacher: { login: list[i].login, name: list[i].name, uid: list[i].uid }, warning });
   }
@@ -334,20 +399,8 @@ async function handleApi(req, res, url) {
     let deleted = false;
     if (rec) {
       // Багшийн нууц үг шаардахгүй — админы нууц үг + «TIIM» хангалттай.
-      // Firebase Auth аккаунтыг устгахад тухайн хэрэглэгчийн idToken хэрэгтэй тул
-      // нууц үг өгөгдсөн үед л хамт устгана, эс бөгөөс зөвхөн жагсаалтаас хасна.
-      const pw = String(body.currentPassword || '');
-      if (pw) {
-        try {
-          const signIn = await httpsJson('POST', 'https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=' + encodeURIComponent(s.firebaseApiKey), {},
-            { email: rec.email || teacherEmail(rec.login), password: pw, returnSecureToken: true });
-          if (signIn.status < 400) {
-            const del = await httpsJson('POST', 'https://identitytoolkit.googleapis.com/v1/accounts:delete?key=' + encodeURIComponent(s.firebaseApiKey), {},
-              { idToken: signIn.data.idToken });
-            deleted = del.status < 400;
-          }
-        } catch (e) { console.warn('auth delete failed', e.message); }
-      }
+      // Аккаунтыг үүсгэх үед авсан refresh token-оор idToken авч Firebase-ээс бүрмөсөн устгана.
+      deleted = await deleteTeacherAuth(s, rec.email || teacherEmail(rec.login), rec, String(body.currentPassword || ''));
     }
     writeJson(FILES.teachers, list.filter((t) => t.login !== login && t.email !== login));
     return json(res, 200, { ok: true, firebaseDeleted: deleted, authAccountRemains: !!rec && !deleted });

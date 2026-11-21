@@ -2155,7 +2155,12 @@ const teacherSignIn = async (email, password) => {
   const cred = await auth.signInWithEmailAndPassword(teacherLoginToEmail(email), password);
   try {
     const r = (await withAuthRetry(() => getDb().ref('users/' + cred.user.uid + '/role').once('value'))).val();
-    if (r === 'student') { await auth.signOut(); throw new Error('Энэ сурагчийн акаунт байна. Сурагчаар нэвтэрнэ үү.'); }
+    if (r === 'student') {
+      // `teachers/{uid}` бичлэг байвал админы үүсгэсэн багш — хуучин 'student' role-ыг үл харгалзана
+      let isTeacher = false;
+      try { isTeacher = !!(await withAuthRetry(() => getDb().ref('teachers/' + cred.user.uid).once('value'))).val(); } catch (_) { isTeacher = true; }
+      if (!isTeacher) { await auth.signOut(); throw new Error('Энэ сурагчийн акаунт байна. Сурагчаар нэвтэрнэ үү.'); }
+    }
   } catch (e) { if (String(e.message).includes('сурагчийн')) throw e; }
   try { localStorage.setItem('se_role', 'teacher'); } catch {}
   return cred.user;
@@ -10097,6 +10102,33 @@ const seFbAuth = async (endpoint, payload) => {
   return data || {};
 };
 
+/* Хадгалсан refresh token-оор шинэ idToken авах (нууц үг хэрэггүй) */
+const seFbTokenRefresh = async (rt) => {
+  const s = await seSecrets();
+  const key = String(s.firebaseApiKey || '');
+  if (!key || !rt) throw new Error('refresh token олдсонгүй');
+  const r = await fetch('https://securetoken.googleapis.com/v1/token?key=' + encodeURIComponent(key), {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: 'grant_type=refresh_token&refresh_token=' + encodeURIComponent(rt)
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((d && d.error && (d.error.message || d.error)) || ('token ' + r.status));
+  return d || {};
+};
+
+/* Firebase Realtime DB-д idToken-оор бичих (профайлын role-ыг засах гэх мэт) */
+const seDbPut = async (path, obj, idToken) => {
+  const s = await seSecrets();
+  const db = String(s.firebaseDb || '').replace(/\/$/, '');
+  if (!db || !idToken) return false;
+  try {
+    const r = await fetch(db + '/' + path + '.json?auth=' + encodeURIComponent(idToken), {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(obj)
+    });
+    return r.ok;
+  } catch (e) { return false; }
+};
+
 /* record-ийн нэвтрэх нэр/нууц үгийг Firebase дээр бодитоор солино */
 const seTeacherCredsUpdate = async (rec, patch) => {
   const oldEmail = String(rec.email || teacherLoginToEmail(rec.login)).toLowerCase();
@@ -10107,7 +10139,7 @@ const seTeacherCredsUpdate = async (rec, patch) => {
   const oldPass = String(rec.password || patch.currentPassword || '');
   const emailChanged = !!newEmail && newEmail !== oldEmail;
   const passChanged = !!newPass && newPass !== String(rec.password || '');
-  const out = { login: newLogin, name: newName, email: newEmail || oldEmail, password: newPass || oldPass, uid: rec.uid || '', warning: '' };
+  const out = { login: newLogin, name: newName, email: newEmail || oldEmail, password: newPass || oldPass, uid: rec.uid || '', rt: rec.rt || '', warning: '' };
   if (!emailChanged && !passChanged) return out;
   if (newPass && newPass.length < 6) throw new Error('Шинэ нууц үг 6+ тэмдэгт байх ёстой');
   if (!oldPass) throw new Error('Одоогийн нууц үгийг оруулна уу');
@@ -10117,9 +10149,11 @@ const seTeacherCredsUpdate = async (rec, patch) => {
   } catch (e) {
     throw new Error('Одоогийн нууц үг буруу байна (' + ((e && e.message) || '') + ')');
   }
+  out.rt = auth.refreshToken || out.rt;
   if (!emailChanged) {
     const r = await seFbAuth('update', { idToken: auth.idToken, returnSecureToken: true, password: newPass, displayName: newName });
     out.uid = (r && r.localId) || auth.localId || out.uid;
+    out.rt = (r && r.refreshToken) || out.rt;
     return out;
   }
   /* Firebase нь нэвтрэх имэйлийг шууд солихыг зөвшөөрдөггүй (шинэ имэйлээ баталгаажуулахыг
@@ -10138,6 +10172,7 @@ const seTeacherCredsUpdate = async (rec, patch) => {
     out.warning = 'Хуучин аккаунтыг устгаж чадсангүй: ' + ((e && e.message) || '');
   }
   out.uid = su.localId || out.uid;
+  out.rt = su.refreshToken || out.rt;
   out.password = pw;
   return out;
 };
@@ -10161,13 +10196,13 @@ async function seStaticApi(path, opts) {
   if (path === '/api/admin/teachers' && method === 'GET') {
     const raw = SE_LS.get('se_static_teachers', []);
     // Хуучин хувилбар нууц үг хадгалсан байвал цэвэрлэнэ (локалд нууц үг үлдэхгүй)
-    let dirty = false;
     const list = (raw || []).map((t) => {
       if (!t) return t;
-      if (Object.prototype.hasOwnProperty.call(t, 'password')) { dirty = true; const c = Object.assign({}, t); delete c.password; return c; }
-      return t;
+      const c = Object.assign({}, t);
+      delete c.password; // хуучин хувилбарын нууц үг
+      delete c.rt;       // refresh token-ыг гадагш гаргахгүй
+      return c;
     });
-    if (dirty) SE_LS.set('se_static_teachers', list);
     return { ok: true, teachers: list };
   }
   if (path === '/api/admin/teachers' && method === 'POST') {
@@ -10177,24 +10212,29 @@ async function seStaticApi(path, opts) {
     if (!login || password.length < 6) throw err('Нэвтрэх нэр болон 6+ нууц үг хэрэгтэй');
     const email = login.includes('@') ? login.toLowerCase() : login.replace(/[^a-z0-9._-]/gi, '').toLowerCase() + '@smartexam.app';
     let uid = '';
+    let rt = '';
     let reclaimed = false;
+    let auth = null;
     try {
-      const cred = await teacherSignUp(login, password, name);
-      uid = (cred && cred.uid) || '';
+      auth = await seFbAuth('signUp', { email: email, password: password, returnSecureToken: true });
     } catch (e) {
-      const code = (e && e.code) || '';
-      if (code !== 'auth/email-already-in-use') throw err((e && e.message) || 'Бүртгэл үүсгэсэнгүй');
-      // Firebase-д хуучин аккаунт устгагдалгүй үлдсэн. Ижил нууц үгээр нэвтэрч чадвал түүнийг дахин ашиглана.
-      let auth = null;
+      const msg = (e && e.message) || '';
+      if (!/EMAIL_EXISTS/i.test(msg)) throw err(msg || 'Бүртгэл үүсгэсэнгүй');
+      // Firebase-д хуучин аккаунт устгагдалгүй үлдсэн. Ижил нууц үгээр нэвтэрч чадвал дахин ашиглана.
       try { auth = await seFbAuth('signInWithPassword', { email: email, password: password, returnSecureToken: true }); } catch (_) { auth = null; }
-      if (!auth) throw err('Энэ нэр Firebase-д бүртгэлтэй байна (устгагдаагүй), гэхдээ нууц үг таарахгүй тул дахин ашиглаж чадсангүй. Firebase Console → Authentication-оос хуучин аккаунтыг устгана уу.');
-      uid = auth.localId || '';
+      if (!auth) throw err('Энэ нэр Firebase-д бүртгэлтэй байна, гэхдээ нууц үг таарахгүй тул дахин ашиглаж чадсангүй. Firebase Console → Authentication-оос хуучин аккаунтыг устгана уу.');
       reclaimed = true;
-      try { await seFbAuth('update', { idToken: auth.idToken, displayName: name }); } catch (_) {}
     }
+    uid = (auth && auth.localId) || '';
+    rt = (auth && auth.refreshToken) || '';
+    try { await seFbAuth('update', { idToken: auth.idToken, displayName: name }); } catch (_) {}
+    // Профайл: хуучин аккаунт 'student' гэж бүртгэгдсэн байсан ч багш болгож дарж бичнэ
+    await seDbPut('users/' + uid, { role: 'teacher', name: name, login: login, email: email, createdBy: 'admin' }, auth.idToken);
+    await seDbPut('teachers/' + uid, { displayName: name, email: email, login: login, createdAt: new Date().toISOString() }, auth.idToken);
     const list = SE_LS.get('se_static_teachers', []);
-    // Нууц үгийг браузер/файлд ХАДГАЛАХГҮЙ — устгах, солиход админ одоогийн нууц үгийг бичнэ.
-    list.push({ login: login, email: email, name: name, uid: uid, createdAt: new Date().toISOString() });
+    // Нууц үгийг ХАДГАЛАХГҮЙ. Дараа нь нууц үггүйгээр аккаунт устгах боломжтой байхын тулд
+    // зөвхөн refresh token-ыг хадгална (нууц үг биш, эрхгүй болгож болох токен).
+    list.push({ login: login, email: email, name: name, uid: uid, rt: rt, createdAt: new Date().toISOString() });
     SE_LS.set('se_static_teachers', list);
     return { ok: true, email: email, uid: uid, reclaimed: reclaimed, staticMode: true };
   }
@@ -10222,14 +10262,24 @@ async function seStaticApi(path, opts) {
     const rec = list.find((t) => t && (t.login === login || t.email === login));
     let deleted = false;
     if (rec) {
-      // Багшийн нууц үг шаардахгүй — нууц үг өгсөн үед л Firebase Auth аккаунтыг хамт устгана.
-      const pw = String(body.currentPassword || '');
-      if (pw) {
+      // Багшийн нууц үг шаардахгүй: үүсгэх үед авсан refresh token-оор idToken авч бүрмөсөн устгана.
+      if (rec.rt) {
         try {
-          const a = await seFbAuth('signInWithPassword', { email: String(rec.email || teacherLoginToEmail(rec.login)), password: pw, returnSecureToken: true });
-          await seFbAuth('delete', { idToken: a.idToken });
+          const t = await seFbTokenRefresh(rec.rt);
+          await seFbAuth('delete', { idToken: t.id_token });
           deleted = true;
-        } catch (e) { console.warn('auth delete failed', e && e.message); }
+        } catch (e) { console.warn('refresh-token delete failed', e && e.message); }
+      }
+      // Нууц үг өгөгдсөн бол түүгээр нь оролдоно (refresh token-гүй хуучин бичлэг)
+      if (!deleted) {
+        const pw = String(body.currentPassword || '');
+        if (pw) {
+          try {
+            const a = await seFbAuth('signInWithPassword', { email: String(rec.email || teacherLoginToEmail(rec.login)), password: pw, returnSecureToken: true });
+            await seFbAuth('delete', { idToken: a.idToken });
+            deleted = true;
+          } catch (e) { console.warn('password delete failed', e && e.message); }
+        }
       }
     }
     SE_LS.set('se_static_teachers', list.filter((t) => t && t.login !== login && t.email !== login));
@@ -10357,7 +10407,7 @@ function AdminApp() {
       await load();
       alert(r && r.firebaseDeleted
         ? 'Устгалаа (Firebase Auth аккаунт ч хамт устлаа).'
-        : 'Жагсаалтаас устгалаа. Багшийн нууц үг мэдэгдэхгүй тул Firebase Auth аккаунт нь хэвээр үлдлээ. Дахин үүсгэхэд ижил нууц үг таарвал тэр аккаунтыг автоматаар дахин ашиглана (Firebase Console → Authentication-оос гар аргаар устгаж болно).');
+        : 'Жагсаалтаас устгалаа. Гэхдээ Firebase Auth аккаунт устсангүй (хуучин бичлэг, refresh token-гүй) — Firebase Console → Authentication-оос гар аргаар устгана уу.');
     } catch (e) {
       patchEdit({ busy: false, msg: (e && e.message) || 'Алдаа' });
     }
