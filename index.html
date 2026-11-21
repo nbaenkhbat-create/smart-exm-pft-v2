@@ -84,11 +84,19 @@ window.__SE_IS_QR__ = (location.hash || '').indexOf('#qr=') === 0;
       if (isLocal(this)) { var ks = Object.keys(mem); var n = Number(i) || 0; return n < ks.length ? ks[n] : null; }
       return kAt.call(this, i);
     };
-    /* Хуучин хувилбарын үлдэгдлийг шууд арилгах */
+    /* Хуучин хувилбарын үлдэгдлийг арилгах (ачаалахын өмнө/дараа хэд хэдэн удаа) */
+    var purge = function () {
+      try {
+        var ls = window.localStorage, dead = [], i = 0, kk = null;
+        for (i = 0; i < ls.length; i++) { kk = kAt.call(ls, i); if (kk && !ALLOW[kk]) dead.push(kk); }
+        dead.forEach(function (d) { r.call(ls, d); });
+      } catch (e) {}
+    };
+    purge();
     try {
-      var ls = window.localStorage, dead = [];
-      for (var i = 0; i < ls.length; i++) { var kk = kAt.call(ls, i); if (kk && !ALLOW[kk]) dead.push(kk); }
-      dead.forEach(function (kk) { r.call(ls, kk); });
+      document.addEventListener('DOMContentLoaded', purge);
+      window.addEventListener('load', purge);
+      setTimeout(purge, 1500);
     } catch (e) {}
     /* Firebase Auth нэвтрэлтийн IndexedDB үлдэгдлийг ч арилгана */
     try {
