@@ -3150,7 +3150,7 @@ function LandingPage({ onSelect }) {
 }
 
 // ─── TEACHER LOGIN (Firebase Auth) ───────────────────────────────────────────
-function TeacherLogin({ onLogin }) {
+function TeacherLogin({ onLogin, onBack }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPass, setShowPass] = useState(false);
@@ -3209,7 +3209,10 @@ function TeacherLogin({ onLogin }) {
           <div className="form-hint">Шинээр бүртгүүлэх боломжгүй — багшийн эрхийг зөвхөн админ үүсгэнэ (админы «Багш нар» хэсэг).</div>
           {err && <div className="form-error">⚠ {err}</div>}
         </div>
-        <div className="modal-foot" style={{flexWrap:'wrap',gap:8}}>
+        <div className="modal-foot" style={{flexWrap:'wrap',gap:8,justifyContent:'space-between'}}>
+          {onBack ? (
+            <button className="btn btn-outline btn-lg" onClick={onBack} disabled={busy}>← Буцах</button>
+          ) : <span />}
           <button className="btn btn-primary btn-lg" onClick={handle} disabled={busy}>
             {busy ? '⏳ ...' : '▶ Нэвтрэх'}
           </button>
@@ -11126,6 +11129,7 @@ function App() {
         <>
           <LandingPage onSelect={() => {}} />
           <TeacherLogin
+            onBack={goHome}
             onLogin={(name) => {
               try { localStorage.setItem(SE_TEACHER, name); } catch {}
               setPage({ type: 'teacherDash', name });
