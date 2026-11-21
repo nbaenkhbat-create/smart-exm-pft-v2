@@ -2296,6 +2296,7 @@ const callGradeSubmission = async (payload) => {
         id, uid: getAuth()?.currentUser?.uid || null,
         examId: payload.roomId, answers: ans, score, correctCount: correct, totalCount: total,
         studentName: payload.studentName || '', studentClass: payload.studentClass || '',
+        ...(payload.round ? { round: payload.round } : {}),
         variantLabel: label, studentVersion: label,
         cheatLog: payload.cheatLog || [], timeSpentSec: payload.timeSpentSec || 0,
         submittedAt: new Date().toISOString(), verified: true, gradedBy: 'client'
@@ -8511,6 +8512,7 @@ function ExamTaker({ exam, studentName, studentClass, onSubmit, onBack }) {
           const graded = await callGradeSubmission({
             roomId: exam.id,
             classId: exam._classId || null,
+            round: exam._round || null,
             answers: ans,
             studentName: submission.studentName,
             studentClass: submission.studentClass,
@@ -9077,6 +9079,8 @@ const saveAttempt = async (sub, exam, meta) => {
   const rec = { at: sub.submittedAt, score: sub.score || 0, correct: sub.correctCount || 0, total: sub.totalCount || 0,
     sec: sub.timeSpentSec || 0, mode: exam._subset ? 'mistakes' : 'full', variant: sub.variantLabel || 'A',
     title: exam.title || '', kind: meta.kind || 'exam' };
+  // Оноолтын үе — багш шалгалтыг устгаж дахин оноосон бол хуучин оролдлого тооцогдохгүй
+  if (meta.round) rec.round = meta.round;
   if (exam._extra) rec.extra = true; // оролдлого дууссаны дараах дахин өгөлт — дүнд тооцогдохгүй
   if (Array.isArray(sub.wrongIds)) rec.wrongIds = sub.wrongIds;
   try {
@@ -9204,6 +9208,19 @@ function StudentHome({ name, onStart, onLogout }) {
       .catch(() => { if (ok) setSelAsg({}); });
     return () => { ok = false; };
   }, [sel?.roomId]);
+  // Багш шалгалтыг ангиас устгаж дахин оноосон бол (round шинэ) хуучин оролдлогыг
+  // сурагчийн өөрийн бүртгэлээс цэвэрлэнэ — хуучин дүн дахин харагдахгүй
+  useEffect(() => {
+    const db = getDb(); const uid = getAuth()?.currentUser?.uid;
+    const r = (selAsg && selAsg.round) || '';
+    if (!db || !uid || !sel || !r) return;
+    const ref = db.ref('attempts/' + uid + '/' + sel.roomId);
+    ref.once('value').then(sn => {
+      const v = sn.val() || {}; const up = {};
+      Object.entries(v).forEach(([k, a]) => { if (((a && a.round) || '') !== r) up[k] = null; });
+      if (Object.keys(up).length) ref.update(up).catch(() => {});
+    }).catch(() => {});
+  }, [selAsg && selAsg.round, sel && sel.roomId]);
   // Хоцорсон хүсэлтийн төлөв (багш зөвшөөрсөн эсэх)
   useEffect(() => {
     const db = getDb(); const uid = getAuth()?.currentUser?.uid;
@@ -9340,7 +9357,8 @@ function StudentHome({ name, onStart, onLogout }) {
         return;
       }
       const isExamKind = t.kind !== 'practice';
-      const doneFull = sortedAttempts(att[t.roomId]).filter(a => a.mode !== 'mistakes').length;
+      const myRound = asg.round || '';
+      const doneFull = sortedAttempts(att[t.roomId]).filter(a => a.mode !== 'mistakes' && (!myRound || a.round === myRound)).length;
       let st0 = selSet;
       try { st0 = (await roomRef(getDb(), t.roomId).child('settings').once('value')).val() || selSet || {}; } catch (_) {}
       if (copy && copy.maxAttempts > 0) st0 = { ...(st0 || {}), maxAttempts: copy.maxAttempts };
@@ -9360,13 +9378,16 @@ function StudentHome({ name, onStart, onLogout }) {
       if (copy && lbl && !(copy.versions || {})[lbl]) lbl = Object.keys(copy.versions || {})[0] || '';
       const exam0 = lbl ? buildExamWithVariant(room, lbl) : await pickVariantForStudent(room, name, t.cls.name);
       if (copy) exam0._classId = t.cls.id;
+      exam0._round = asg.round || '';
       // Шалгалтын бүх оролдлого дууссаны дараах бүтэн дахин өгөлт — дүнд тооцогдохгүй (дасгал горим)
       const extraFull = !onlyIds && isExamKind && cap > 0 && doneFull >= cap;
-      onStart(prepareAttempt(exam0, extraFull ? (exam0.questions || []).map(q => q.id) : onlyIds, extraFull), { classId: t.cls.id, kind: t.kind });
+      onStart(prepareAttempt(exam0, extraFull ? (exam0.questions || []).map(q => q.id) : onlyIds, extraFull), { classId: t.cls.id, kind: t.kind, round: asg.round || '' });
     } catch (e) { alert(e.message || 'Алдаа'); }
     setBusy(false);
   };
-  const list = sel ? sortedAttempts(att[sel.roomId]) : [];
+  // Оноолтын үе (round) солигдсон бол өмнөх үеийн оролдлогыг харуулахгүй
+  const selRound = (selAsg && selAsg.round) || (sel && sel.round) || '';
+  const list = sel ? sortedAttempts(att[sel.roomId]).filter(a => !selRound || a.round === selRound) : [];
   const last = list[list.length - 1];
   const wrong = last?.wrongIds || [];
   // Firebase хоосон жагсаалтыг хадгалдаггүй тул 100% оролдлого wrongIds-гүй ирнэ — алдаагүй гэж үзнэ
@@ -9390,7 +9411,7 @@ function StudentHome({ name, onStart, onLogout }) {
       </div></div>
       {!tests.length && <div style={{ color: 'var(--text2)' }}>Одоогоор тест алга. Багшийн өгсөн ангийн кодоор ангидаа нэгдээрэй.</div>}
       {tests.map(t => {
-        const l = sortedAttempts(att[t.roomId]); const lw = l[l.length - 1]?.wrongIds;
+        const l = sortedAttempts(att[t.roomId]).filter(a => !t.round || a.round === t.round); const lw = l[l.length - 1]?.wrongIds;
         return (
           <div key={t.cls.id + t.roomId} className="exam-card" style={{ marginBottom: 10, cursor: 'pointer' }} onClick={() => { setSel(t); setChoose(false); }}>
             <div className="exam-card-title">{t.title}</div>
@@ -9710,6 +9731,18 @@ function ClassesPage({ exams, onBack }) {
         up['classMembers/' + cur + '/' + sid + '/joined/' + rid] = null;
         up['classMembers/' + cur + '/' + sid + '/late/' + rid] = null;
       });
+      // Тухайн ангийн сурагчдын илгээсэн дүнг өрөөнөөс хасна (бусад ангийн дүн хэвээр үлдэнэ)
+      try {
+        const subs = (await db.ref('activeRooms/' + rid + '/submissions').once('value')).val() || {};
+        const clsName = String((c || {}).name || '').trim().toLowerCase();
+        const names = mIds.map(sid => String((members[sid] || {}).name || '').trim().toLowerCase()).filter(Boolean);
+        Object.entries(subs).forEach(([subId, sm]) => {
+          if (!sm) return;
+          const byUid = sm.uid && mIds.includes(sm.uid);
+          const byName = !!clsName && String(sm.studentClass || '').trim().toLowerCase() === clsName && names.includes(String(sm.studentName || '').trim().toLowerCase());
+          if (byUid || byName) up['activeRooms/' + rid + '/submissions/' + subId] = null;
+        });
+      } catch (_) {}
       await db.ref().update(up);
       setDelAsk(null);
       setSel({});
@@ -9908,7 +9941,30 @@ function ClassesPage({ exams, onBack }) {
   const doAssign = async () => {
     const ex = exams.find(e => e.id === pick.exam); if (!ex) return;
     try {
-      await getDb().ref('classes/' + cur + '/assignments/' + ex.id).set({ title: ex.title, kind: assignKind, at: new Date().toISOString(), state: 'open', mode: 'manual', openedAt: new Date().toISOString(), entryMinutes: 0 });
+      const db = getDb(); if (!db || !cur) return;
+      const aRef = db.ref('classes/' + cur + '/assignments/' + ex.id);
+      const prev = (await aRef.once('value')).val();
+      // round — оноолтын үе. Дахин оноох бүрт шинээр үүсэх тул өмнөх үеийн оролдлого/дүн дахин харагдахгүй
+      const round = (prev && prev.round) || ('r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7));
+      await aRef.set({ title: ex.title, kind: assignKind, at: new Date().toISOString(), state: 'open', mode: 'manual', openedAt: new Date().toISOString(), entryMinutes: 0, round });
+      // Шинээр оноож байгаа бол энэ ангийн хуучин илгээлт/дүнг цэвэрлэнэ («устсан бол устсан»)
+      if (!prev) {
+        const up = {};
+        up['classResults/' + cur + '/' + ex.id] = null;
+        up['zgScans/' + cur + '/' + ex.id] = null;
+        try {
+          const subs = (await db.ref('activeRooms/' + ex.id + '/submissions').once('value')).val() || {};
+          const clsName = String((c || {}).name || '').trim().toLowerCase();
+          const names = mIds.map(sid => String((members[sid] || {}).name || '').trim().toLowerCase()).filter(Boolean);
+          Object.entries(subs).forEach(([subId, sm]) => {
+            if (!sm) return;
+            const byUid = sm.uid && mIds.includes(sm.uid);
+            const byName = !!clsName && String(sm.studentClass || '').trim().toLowerCase() === clsName && names.includes(String(sm.studentName || '').trim().toLowerCase());
+            if (byUid || byName) up['activeRooms/' + ex.id + '/submissions/' + subId] = null;
+          });
+        } catch (_) {}
+        try { await db.ref().update(up); } catch (_) {}
+      }
       setAssignOpen(false); setPick({ exam: '' });
     } catch (e) { alert('Оноож чадсангүй: ' + (e?.message || e)); }
   };
