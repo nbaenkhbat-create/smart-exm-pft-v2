@@ -9077,6 +9077,37 @@ const saveAttempt = async (sub, exam, meta) => {
 const fmtDate = iso => { try { return new Date(iso).toLocaleString('mn-MN', { dateStyle: 'short', timeStyle: 'short' }); } catch { return iso || ''; } };
 const sortedAttempts = obj => Object.entries(obj || {}).map(([id, v]) => ({ id, ...v })).sort((a, b) => (a.at || '').localeCompare(b.at || ''));
 
+/* ── Шалгалт руу нэвтрэх цонх ───────────────────────────────────────────────
+   mode: 'now'       — багш «Шууд эхлүүлэх» дарсан даруйд түгжинэ
+         'countdown' — хүлээлгийн хугацаа (entrySec секунд), дуусмагц түгжинэ
+         'manual'    — хуучин горим: entrySec=0 бол гараар хаах хүртэл нээлттэй      */
+const seAssignmentEntry = (a, now) => {
+  const t = a || {};
+  const nowMs = now == null ? Date.now() : now;
+  const mode = t.mode === 'now' || t.mode === 'countdown' ? t.mode : 'manual';
+  const opened = t.openedAt ? new Date(t.openedAt).getTime() : 0;
+  const sec = Math.max(0, Math.round(Number(t.entrySec != null ? t.entrySec : (Number(t.entryMinutes) || 0) * 60) || 0));
+  let entryEndsAt;
+  if (mode === 'now') entryEndsAt = opened;
+  else if (mode === 'countdown') entryEndsAt = opened + sec * 1000;
+  else entryEndsAt = sec > 0 ? opened + sec * 1000 : Infinity;
+  const startAt = mode === 'countdown' ? entryEndsAt : opened;
+  return {
+    mode, sec, opened, entryEndsAt, startAt,
+    closed: t.state === 'closed',
+    locked: nowMs > entryEndsAt,
+    waiting: nowMs < startAt,
+    leftSec: Math.max(0, Math.ceil((entryEndsAt - nowMs) / 1000))
+  };
+};
+const seFmtSec = (s) => {
+  const n = Math.max(0, Math.round(Number(s) || 0));
+  if (n < 60) return n + ' сек';
+  const m = Math.floor(n / 60), r = n % 60;
+  return m + ' мин' + (r ? ' ' + r + ' сек' : '');
+};
+const seEntryKind = (kind) => (kind === 'practice' ? 'дасгал' : 'шалгалт');
+
 function StudentAuth({ onDone, onBack }) {
   const [mode, setMode] = useState('login');
   const [f, setF] = useState({ name: '', email: '', password: '' });
@@ -9138,6 +9169,10 @@ function StudentHome({ name, onStart, onLogout }) {
   const [choose, setChoose] = useState(false);
   const [busy, setBusy] = useState(false);
   const [selSet, setSelSet] = useState(null);
+  const [myLate, setMyLate] = useState(null);
+  const [selAsg, setSelAsg] = useState(null);
+  const [wait, setWait] = useState(null);
+  const waitFnRef = useRef(null);
   const uidv = getAuth()?.currentUser?.uid;
   useEffect(() => {
     setSelSet(null);
@@ -9151,8 +9186,35 @@ function StudentHome({ name, onStart, onLogout }) {
         if (ok) setSelSet(v);
       })
       .catch(() => { if (ok) setSelSet({}); });
+    // Багш шалгалтыг нээсэн/түгжсэн төлөвийг шинээр уншина
+    setSelAsg(null);
+    db.ref('classes/' + sel.cls.id + '/assignments/' + sel.roomId).once('value')
+      .then(sn => { if (ok) setSelAsg(sn.val() || {}); })
+      .catch(() => { if (ok) setSelAsg({}); });
     return () => { ok = false; };
   }, [sel?.roomId]);
+  // Хоцорсон хүсэлтийн төлөв (багш зөвшөөрсөн эсэх)
+  useEffect(() => {
+    const db = getDb(); const uid = getAuth()?.currentUser?.uid;
+    if (!db || !uid || !sel) { setMyLate(null); return; }
+    const r = db.ref('classMembers/' + sel.cls.id + '/' + uid + '/late/' + sel.roomId);
+    r.on('value', s => setMyLate(s.val() || null));
+    return () => r.off();
+  }, [sel?.roomId, sel?.cls?.id]);
+  // Хүлээлгийн хугацаа дуусахад шалгалтыг автоматаар эхлүүлнэ
+  useEffect(() => {
+    if (!wait) return;
+    const iv = setInterval(() => {
+      const left = Math.max(0, Math.ceil((wait.until - Date.now()) / 1000));
+      if (left <= 0) {
+        clearInterval(iv);
+        const fn = waitFnRef.current; waitFnRef.current = null;
+        setWait(null);
+        if (fn) fn();
+      } else setWait(w => (w ? { ...w, left } : w));
+    }, 400);
+    return () => clearInterval(iv);
+  }, [wait && wait.until]);
   useEffect(() => {
     const db = getDb(); if (!db || !uidv) return;
     const aRef = db.ref('attempts/' + uidv), cRef = db.ref('studentClasses/' + uidv);
@@ -9172,23 +9234,55 @@ function StudentHome({ name, onStart, onLogout }) {
       if (!db || !uidv) return alert('Нэвтрээгүй байна. Гараад дахин нэвтэрнэ үү.');
       const cid = (await withAuthRetry(() => db.ref('classCodes/' + code.trim().toUpperCase()).once('value'))).val();
       if (!cid) return alert('Ангийн код буруу байна');
-      await withAuthRetry(() => db.ref('classMembers/' + cid + '/' + uidv).set({ name, at: new Date().toISOString() }));
+      // set() биш update() — сурагчийн joined/late мэдээлэл устахгүй
+      await withAuthRetry(() => db.ref('classMembers/' + cid + '/' + uidv).update({ name, at: new Date().toISOString() }));
       await withAuthRetry(() => db.ref('studentClasses/' + uidv + '/' + cid).set(true));
       setCode('');
     } catch (e) { alert('Нэгдэх алдаа: ' + authErrText(e)); }
   };
   const tests = classes.flatMap(c => c.tests.map(t => ({ ...t, cls: c })));
+  // Хоцорсон сурагч багшаас зөвшөөрөл (late entry) хүснэ
+  const requestLate = async (t) => {
+    const db = getDb(); const uid = getAuth()?.currentUser?.uid;
+    if (!db || !uid) { alert('Нэвтрээгүй байна. Гараад дахин нэвтэрнэ үү.'); return; }
+    try {
+      await db.ref('classMembers/' + t.cls.id + '/' + uid + '/late/' + t.roomId).update({ name, at: new Date().toISOString(), status: 'pending' });
+      alert('Хүсэлт илгээгдлээ. Багш зөвшөөрсний дараа «Эхлэх» дарж шалгалт руу орно уу.');
+    } catch (e) { alert('Хүсэлт илгээж чадсангүй: ' + (e?.message || e)); }
+  };
   const start = async (t, onlyIds, label) => {
     setBusy(true);
     try {
       const room = await fetchExamRoomByCode(t.roomId);
       if (room.stopped) throw new Error('Энэ тестийг багш зогсоосон байна.');
-      // Багш хаасан эсвэл нэвтрэх хугацаа дууссан бол оруулахгүй
-      if (t.state === 'closed') throw new Error('Багш энэ ' + (t.kind === 'practice' ? 'дасгалыг' : 'шалгалтыг') + ' хаасан байна. Багшаас нээхийг хүсээрэй.');
-      const entryMin = Number(t.entryMinutes) || 0;
-      if (entryMin > 0 && t.openedAt) {
-        const deadline = new Date(t.openedAt).getTime() + entryMin * 60000;
-        if (Date.now() > deadline) throw new Error('Нэвтрэх хугацаа (' + entryMin + ' мин) дууссан байна. Багшаас дахин нээхийг хүсээрэй.');
+      const db = getDb();
+      const uid = getAuth()?.currentUser?.uid;
+      // Багшийн тохируулсан нэвтрэх цонх: шууд түгжих / хүлээлгийн хугацаа / гараар хаах
+      let asg = t;
+      try {
+        const fresh = (await db.ref('classes/' + t.cls.id + '/assignments/' + t.roomId).once('value')).val();
+        if (fresh) asg = { ...t, ...fresh };
+      } catch (_) {}
+      if (asg.state === 'closed') throw new Error('Багш энэ ' + seEntryKind(t.kind) + 'ыг хаасан байна. Багшаас нээхийг хүсээрэй.');
+      const gate = seAssignmentEntry(asg);
+      let mine = null;
+      try { mine = (await db.ref('classMembers/' + t.cls.id + '/' + uid).once('value')).val(); } catch (_) {}
+      const joinedAt = mine && mine.joined ? mine.joined[t.roomId] : null;
+      const lateReq = mine && mine.late ? mine.late[t.roomId] : null;
+      const lateOk = !!(lateReq && lateReq.status === 'approved');
+      if (gate.locked && !joinedAt && !lateOk) {
+        throw new Error('Нэвтрэх хугацаа' + (gate.sec ? ' (' + seFmtSec(gate.sec) + ')' : '') + ' дууссан байна. «🕒 Хоцорсон хүсэлт илгээх» товчоор багшаас зөвшөөрөл авна уу.');
+      }
+      // Цонх нээлттэй үед нэвтэрснээ тэмдэглэнэ (хугацаа дууссаны дараа ч шалгалтаа үргэлжлүүлэх эрх)
+      if (!gate.locked && !joinedAt) {
+        try { await db.ref('classMembers/' + t.cls.id + '/' + uid + '/joined/' + t.roomId).set({ at: new Date().toISOString(), name }); } catch (_) {}
+      }
+      // Хүлээлгийн хугацаа үргэлжилж байвал дуусахыг хүлээгээд автоматаар эхлүүлнэ
+      if (gate.waiting) {
+        waitFnRef.current = () => start(t, onlyIds, label);
+        setBusy(false);
+        setWait({ until: gate.startAt, left: Math.max(0, Math.ceil((gate.startAt - Date.now()) / 1000)), title: t.title });
+        return;
       }
       const isExamKind = t.kind !== 'practice';
       const doneFull = sortedAttempts(att[t.roomId]).filter(a => a.mode !== 'mistakes').length;
@@ -9220,6 +9314,8 @@ function StudentHome({ name, onStart, onLogout }) {
   const maxA = selSet?.maxAttempts || 0;
   const fullN = list.filter(a => a.mode !== 'mistakes').length;
   const isExamSel = !!sel && sel.kind !== 'practice';
+  const selGate = sel ? seAssignmentEntry({ ...sel, ...(selAsg || {}) }) : null;
+  const selLocked = !!(selGate && selGate.locked && myLate?.status !== 'approved');
   const capSel = maxA > 0 ? maxA : 0;
   const limitReached = capSel > 0 && fullN >= capSel;
   const mistakesLocked = isExamSel && capSel > 0 && !limitReached;
@@ -9263,7 +9359,17 @@ function StudentHome({ name, onStart, onLogout }) {
               {isExamSel && capSel > 0 && !limitReached && <div className="form-hint" style={{ width: '100%' }}>Үлдсэн оролдлого: <b>{capSel - fullN}</b> · Дүнд хамгийн өндөр оноо тооцогдоно.</div>}
               {isExamSel && limitReached && <div className="form-hint" style={{ width: '100%', color: 'var(--red)', fontWeight: 600 }}>⚠️ Бүх {capSel} оролдлого дууссан. Одооноос дахин өгвөл дүнд ТООЦОГДОХГҮЙ (зөвхөн дадлага).</div>}
               {capSel > 0 && <div className="form-hint" style={{ width: '100%' }}>Бүтэн оролдлого: {fullN}/{capSel}{limitReached ? ' — бүгдийг дуусгасан (алдсан асуулт, шалгалтыг дахин өгч болно)' : ''}</div>}
-              {!list.length && <button className="btn btn-primary" disabled={busy} onClick={() => start(sel)}>▶ Эхлэх</button>}
+              {selGate && selGate.locked && myLate?.status !== 'approved' && (
+                <div className="form-hint" style={{ width: '100%', color: 'var(--red)', fontWeight: 600 }}>
+                  🔒 Нэвтрэх хугацаа дууссан{selGate.sec ? ' (' + seFmtSec(selGate.sec) + ')' : ''}. Багшаас зөвшөөрөл авна уу.
+                </div>
+              )}
+              {myLate?.status === 'pending' && <div className="form-hint" style={{ width: '100%' }}>⏳ Хүсэлт илгээгдсэн · багш зөвшөөрснийг хүлээнэ үү...</div>}
+              {myLate?.status === 'approved' && <div className="form-hint" style={{ width: '100%', color: 'var(--green)', fontWeight: 600 }}>✅ Багш зөвшөөрлөө — «Эхлэх» дарна уу.</div>}
+              {selGate && selGate.locked && (!myLate || myLate.status === 'rejected') && (
+                <button className="btn btn-outline" onClick={() => requestLate(sel)}>🕒 Хоцорсон хүсэлт илгээх</button>
+              )}
+              {!list.length && <button className="btn btn-primary" disabled={busy || selLocked} onClick={() => start(sel)}>▶ Эхлэх</button>}
               {list.length > 0 && !choose && <button className="btn btn-primary" onClick={() => setChoose(true)}>🔁 Дахин шалгалт өгөх</button>}
               {choose && <>
                 {!mistakesLocked && <button className="btn btn-violet" disabled={busy || !wrong.length} onClick={() => start(sel, wrong, last.variant)}>
@@ -9276,6 +9382,18 @@ function StudentHome({ name, onStart, onLogout }) {
             {choose && noMistakes && <div className="form-hint">Сүүлийн оролдлого {last.score}% — алдсан асуулт алга 🎉 (алдсан асуултыг зөвхөн сүүлийн оролдлогын алдаанаас авна)</div>}
           </div>
         </div></div>
+      )}
+      {wait && (
+        <div className="modal-overlay" style={{ zIndex: 700 }}>
+          <div className="modal" style={{ maxWidth: 360 }}>
+            <div className="modal-body" style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '2.1rem', fontWeight: 800, fontFamily: 'Outfit' }}>⏳ {seFmtSec(wait.left)}</div>
+              <div style={{ marginBottom: 6 }}>{wait.title || 'Шалгалт'} эхлэхийг хүлээж байна...</div>
+              <div className="form-hint" style={{ marginBottom: 10 }}>Хугацаа дуусмагц шалгалт автоматаар нээгдэнэ. Хуудсаа бүү хаа.</div>
+              <button className="btn btn-outline" onClick={() => { waitFnRef.current = null; setWait(null); }}>Болих</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -9364,7 +9482,13 @@ function ClassesPage({ exams, onBack }) {
   const [assignKind, setAssignKind] = useState('exam');
   const [pick, setPick] = useState({ exam: '' });
   const [info, setInfo] = useState(null); // exam id
-  const [resFor, setResFor] = useState(null); // { rid, minutes } — шалгалт удирдах цонх
+  const [resFor, setResFor] = useState(null); // { rid, mins, secs } — шалгалт удирдах цонх
+  const [tick, setTick] = useState(0);       // хүлээлгийн хугацааны тоолуур
+  useEffect(() => {
+    if (!resFor) return;
+    const iv = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(iv);
+  }, [resFor && resFor.rid]);
   const uidv = getAuth()?.currentUser?.uid;
   const backfilledRef = useRef('');
 
@@ -9534,30 +9658,48 @@ function ClassesPage({ exams, onBack }) {
     alert('Хадгалагдлаа · ' + (me.name || '') + (patch.login ? ' · нэвтрэх нэр: ' + patch.login : '') + (patch.passHash ? ' · нууц үг шинэчлэгдлээ' : ''));
   };
 
-  /* ── Шалгалт/дасгал удирдах: нээх, хаах, нэвтрэх хугацаа ── */
+  /* ── Шалгалт/дасгал удирдах: шууд эхлүүлэх, хүлээлгийн хугацаа, хаах, хоцорсон зөвшөөрөл ── */
   const openRes = (rid) => {
     const a = (c?.assignments || {})[rid] || {};
-    setResFor({ rid, minutes: a.entryMinutes != null ? String(a.entryMinutes) : '0', busy: false });
+    const g = seAssignmentEntry(a);
+    const left = g.mode === 'countdown' && g.leftSec > 0 ? g.leftSec : 60;
+    setResFor({ rid, mins: String(Math.floor(left / 60)), secs: String(left % 60), busy: false });
   };
   const patchRes = (p) => setResFor(s => (s ? Object.assign({}, s, p) : s));
-  const resMinutes = () => Math.max(0, Math.min(600, Math.round(Number(resFor && resFor.minutes) || 0)));
-  const saveEntryMinutes = async () => {
-    const db = getDb(); if (!db || !cur || !resFor) return;
-    const mins = resMinutes();
-    await db.ref('classes/' + cur + '/assignments/' + resFor.rid).update({ entryMinutes: mins });
-    patchRes({ minutes: String(mins) });
+  const resTotalSec = () => {
+    const m = Math.max(0, Math.min(60, Math.round(Number(resFor && resFor.mins) || 0)));
+    const s = Math.max(0, Math.min(59, Math.round(Number(resFor && resFor.secs) || 0)));
+    return m * 60 + s;
   };
-  const restartAssign = async () => {
+  const startAssignNow = async () => {
     const db = getDb(); if (!db || !cur || !resFor) return;
-    const mins = resMinutes();
-    await db.ref('classes/' + cur + '/assignments/' + resFor.rid).update({ state: 'open', openedAt: new Date().toISOString(), entryMinutes: mins });
-    patchRes({ minutes: String(mins) });
-    alert('Дахин эхэллээ' + (mins > 0 ? ' · сурагчид одоогоос ' + mins + ' минутын дотроос нэвтэрнэ.' : ' · нэвтрэх хугацааны хязгааргүй.'));
+    const iso = new Date().toISOString();
+    await db.ref('classes/' + cur + '/assignments/' + resFor.rid).update({ state: 'open', mode: 'now', openedAt: iso, startsAt: iso, entrySec: 0, entryMinutes: 0 });
+    alert('Шалгалт эхэллээ · шинээр сурагч нэвтрэх боломжгүй (түгжигдлээ).\nХоцорсон сурагч хүсэлт илгээвэл энэ цонхоос зөвшөөрнө үү.');
+  };
+  const startAssignCountdown = async () => {
+    const db = getDb(); if (!db || !cur || !resFor) return;
+    const total = resTotalSec();
+    if (total < 5) { alert('Хүлээлгийн хугацаа хамгийн багадаа 5 секунд байна.'); return; }
+    const nowMs = Date.now();
+    await db.ref('classes/' + cur + '/assignments/' + resFor.rid).update({
+      state: 'open', mode: 'countdown',
+      openedAt: new Date(nowMs).toISOString(),
+      startsAt: new Date(nowMs + total * 1000).toISOString(),
+      entrySec: total, entryMinutes: Math.ceil(total / 60)
+    });
+    alert('Хүлээлгийн хугацаа эхэллээ · ' + seFmtSec(total) + '.\nСурагчид энэ хугацаанд нэвтэрч амжина. Хугацаа дуусмагц шалгалт эхэлж, шинээр нэвтрэх түгжигдэнэ.');
   };
   const closeAssign = async () => {
     const db = getDb(); if (!db || !cur || !resFor) return;
     await db.ref('classes/' + cur + '/assignments/' + resFor.rid).update({ state: 'closed' });
     alert('Хаагдлаа · сурагчид шинээр нэвтрэх боломжгүй.');
+  };
+  const setLateStatus = async (sid, status) => {
+    const db = getDb(); if (!db || !cur || !resFor) return;
+    try {
+      await db.ref('classMembers/' + cur + '/' + sid + '/late/' + resFor.rid).update({ status, decidedAt: new Date().toISOString() });
+    } catch (e) { alert('Хадгалж чадсангүй: ' + (e?.message || e)); }
   };
 
   const openBulk = () => {
@@ -9579,7 +9721,7 @@ function ClassesPage({ exams, onBack }) {
   const doAssign = async () => {
     const ex = exams.find(e => e.id === pick.exam); if (!ex) return;
     try {
-      await getDb().ref('classes/' + cur + '/assignments/' + ex.id).set({ title: ex.title, kind: assignKind, at: new Date().toISOString(), state: 'open', openedAt: new Date().toISOString(), entryMinutes: 0 });
+      await getDb().ref('classes/' + cur + '/assignments/' + ex.id).set({ title: ex.title, kind: assignKind, at: new Date().toISOString(), state: 'open', mode: 'manual', openedAt: new Date().toISOString(), entryMinutes: 0 });
       setAssignOpen(false); setPick({ exam: '' });
     } catch (e) { alert('Оноож чадсангүй: ' + (e?.message || e)); }
   };
@@ -9793,7 +9935,9 @@ function ClassesPage({ exams, onBack }) {
                           <a style={{ cursor: 'pointer', color: 'var(--primary)' }} onClick={() => openRes(rid)}>📄 {t.title || ex.title || 'Тест'}</a>
                           {t.state === 'closed'
                             ? <span className="badge" style={{ marginLeft: 6, background: '#fee2e2', color: '#b91c1c' }}>Хаалттай</span>
-                            : <span className="badge" style={{ marginLeft: 6, background: '#dcfce7', color: '#166534' }}>Нээлттэй</span>}
+                            : seAssignmentEntry(t).locked
+                              ? <span className="badge" style={{ marginLeft: 6, background: '#fef3c7', color: '#92400e' }}>Түгжигдсэн</span>
+                              : <span className="badge" style={{ marginLeft: 6, background: '#dcfce7', color: '#166534' }}>Нээлттэй</span>}
                         </td>
                         <td>{ex.subject || '—'}</td>
                         <td>{vals.length} / {mIds.length}</td>
@@ -10019,9 +10163,11 @@ function ClassesPage({ exams, onBack }) {
         const t = (c?.assignments || {})[rid] || {};
         const kindLbl = t.kind === 'practice' ? 'дасгал' : 'шалгалт';
         const isOpen = t.state !== 'closed';
-        const mins = Number(t.entryMinutes) || 0;
-        const openedAt = t.openedAt ? new Date(t.openedAt).getTime() : 0;
-        const leftMin = isOpen && mins > 0 && openedAt ? Math.ceil((openedAt + mins * 60000 - Date.now()) / 60000) : null;
+        const gate = seAssignmentEntry(t);
+        const modeLbl = gate.mode === 'now' ? 'шууд эхлүүлсэн' : gate.mode === 'countdown' ? 'хүлээлгийн хугацаатай' : 'гараар удирдана';
+        const lateAll = mIds.map(sid => ({ sid, name: (members[sid] || {}).name || '—', req: ((members[sid] || {}).late || {})[rid] || null }))
+          .filter(x => x.req && x.req.status).sort((a, b) => String(b.req.at || '').localeCompare(String(a.req.at || '')));
+        const latePend = lateAll.filter(x => x.req.status === 'pending');
         const did = mIds.map(sid => ({ sid, name: (members[sid] || {}).name || '—', id: (members[sid] || {}).studentId || '—', x: cell(rid, sid) }))
           .filter(r => r.x).sort((a, b) => b.x.val - a.x.val);
         return (
@@ -10032,27 +10178,55 @@ function ClassesPage({ exams, onBack }) {
                 <div style={{ fontSize: '.78rem', color: 'var(--text2)' }}>{kindLbl} · {c?.name} · {did.length} сурагч өгсөн</div>
               </div>
               <div className="modal-body" style={{ maxHeight: '62vh', overflowY: 'auto' }}>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', background: 'var(--surface2)', borderRadius: 10, padding: '10px 12px', marginBottom: 12 }}>
-                  <span className="badge" style={{ background: isOpen ? '#dcfce7' : '#fee2e2', color: isOpen ? '#166534' : '#b91c1c' }}>{isOpen ? '● Нээлттэй' : '● Хаалттай'}</span>
-                  <span style={{ fontSize: '.8rem', color: 'var(--text2)' }}>
-                    {isOpen
-                      ? (mins > 0
-                        ? 'Нэвтрэх хугацаа: ' + mins + ' мин · ' + (leftMin > 0 ? 'үлдсэн ' + leftMin + ' мин' : 'хугацаа дууссан')
-                        : 'Нэвтрэх хугацааны хязгааргүй')
-                      : 'Сурагчид шинээр нэвтрэх боломжгүй'}
-                  </span>
-                  <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
-                    <input className="form-input" style={{ width: 72 }} type="number" min="0" max="600" value={resFor.minutes}
-                      onChange={e => patchRes({ minutes: e.target.value })} title="Нэвтрэх хугацаа (минут)" />
+                <div style={{ background: 'var(--surface2)', borderRadius: 10, padding: '10px 12px', marginBottom: 12 }}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span className="badge" style={{ background: !isOpen ? '#fee2e2' : gate.locked ? '#fef3c7' : '#dcfce7', color: !isOpen ? '#b91c1c' : gate.locked ? '#92400e' : '#166534' }}>
+                      {!isOpen ? '● Хаалттай' : gate.locked ? '● Түгжигдсэн' : '● Нээлттэй'}
+                    </span>
+                    <span style={{ fontSize: '.8rem', color: 'var(--text2)' }}>
+                      {!isOpen
+                        ? 'Сурагчид шинээр нэвтрэх боломжгүй'
+                        : (gate.mode === 'countdown'
+                          ? (gate.waiting ? 'Хүлээлгийн хугацаа · үлдсэн ' + seFmtSec(gate.leftSec) : 'Хүлээлгийн хугацаа дууссан · түгжигдлээ')
+                          : gate.mode === 'now'
+                            ? 'Шууд эхэлсэн · шинээр нэвтрэх түгжигдсэн'
+                            : (gate.sec > 0 ? 'Нэвтрэх цонх: ' + seFmtSec(gate.sec) + ' · ' + (gate.locked ? 'дууссан' : 'үлдсэн ' + seFmtSec(gate.leftSec)) : 'Нэвтрэх хугацааны хязгааргүй'))}
+                    </span>
+                    <span style={{ fontSize: '.72rem', color: 'var(--text3)', marginLeft: 'auto' }}>{modeLbl}</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+                    <input className="form-input" style={{ width: 62 }} type="number" min="0" max="60" value={resFor.mins}
+                      onChange={e => patchRes({ mins: e.target.value })} title="Минут" />
                     <span style={{ fontSize: '.78rem', color: 'var(--text2)' }}>мин</span>
-                    <button className="btn btn-outline btn-sm" onClick={saveEntryMinutes}>💾</button>
+                    <input className="form-input" style={{ width: 62 }} type="number" min="0" max="59" value={resFor.secs}
+                      onChange={e => patchRes({ secs: e.target.value })} title="Секунд" />
+                    <span style={{ fontSize: '.78rem', color: 'var(--text2)' }}>сек</span>
+                    <button className="btn btn-outline btn-sm" onClick={startAssignCountdown}>⏳ Хүлээлгийн хугацаатай эхлүүлэх</button>
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-                  <button className="btn btn-primary btn-sm" onClick={restartAssign}>🔄 Дахин эхлүүлэх</button>
+                  <button className="btn btn-green btn-sm" onClick={startAssignNow}>▶ Шууд эхлүүлэх</button>
                   <button className="btn btn-red btn-sm" disabled={!isOpen} onClick={closeAssign}>⛔ Хаах</button>
                   {mIds.length - did.length > 0 && <span style={{ fontSize: '.78rem', color: 'var(--text2)', alignSelf: 'center' }}>Өгөөгүй: {mIds.length - did.length}</span>}
                 </div>
+                {lateAll.length > 0 && (
+                  <div style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px', marginBottom: 12 }}>
+                    <div style={{ fontWeight: 700, fontSize: '.86rem', marginBottom: 6 }}>🕒 Хоцорсон нэвтрэх хүсэлт ({latePend.length} хүлээгдэж байна)</div>
+                    {lateAll.map(x => (
+                      <div key={x.sid} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '4px 0', borderTop: '1px dashed var(--border)' }}>
+                        <span style={{ flex: '1 1 150px', fontSize: '.85rem' }}>{x.name} · <span style={{ color: 'var(--text2)', fontSize: '.76rem' }}>{fmtDate(x.req.at)}</span></span>
+                        {x.req.status === 'approved'
+                          ? <span className="badge" style={{ background: '#dcfce7', color: '#166534' }}>✓ Зөвшөөрсөн</span>
+                          : x.req.status === 'rejected'
+                            ? <span className="badge" style={{ background: '#fee2e2', color: '#b91c1c' }}>✕ Татгалзсан</span>
+                            : <>
+                                <button className="btn btn-green btn-sm" onClick={() => setLateStatus(x.sid, 'approved')}>✓ Зөвшөөрөх</button>
+                                <button className="btn btn-outline btn-sm" onClick={() => setLateStatus(x.sid, 'rejected')}>✕ Татгалзах</button>
+                              </>}
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {!did.length ? (
                   <div style={{ color: 'var(--text3)', fontSize: '.85rem' }}>Одоогоор хэн ч энэ {kindLbl}ыг өгөөгүй байна.</div>
                 ) : (
