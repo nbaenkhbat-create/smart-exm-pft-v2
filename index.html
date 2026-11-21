@@ -3907,7 +3907,15 @@ function PdfImportStep({ onParsed, onManual, onBack, variantCount, onVariantCoun
   const [err, setErr] = useState('');
   const [status, setStatus] = useState('');
   const [figs, setFigs] = useState({});
+  const [shots, setShots] = useState([]);
+  const shotsRef = useRef([]);
   const vLabel = currentVariantLabel || 'A';
+
+  const setShotsKeep = (next) => {
+    const arr = (typeof next === 'function' ? next(shotsRef.current) : next).slice(0, SCAN_MAX_IMAGES);
+    shotsRef.current = arr;
+    setShots(arr);
+  };
 
   const runParse = async (text, figMap) => {
     const src = (text || '').trim();
@@ -3925,23 +3933,86 @@ function PdfImportStep({ onParsed, onManual, onBack, variantCount, onVariantCoun
     }
   };
 
+  // Зураг / скан PDF / Word → AI (Groq vision) → асуултууд
+  const runAi = async (imgs, text) => {
+    const list = (imgs || []).filter(Boolean).slice(0, SCAN_MAX_IMAGES);
+    const extra = String(text || '').trim();
+    if (!list.length && !extra) return;
+    setParsing(true); setErr('');
+    try {
+      setStatus('AI уншиж байна...');
+      const quiz = await scanGroqVisionQuiz(list, setStatus, undefined, extra, { verify: true });
+      const qs = (quiz && quiz.questions) || [];
+      if (!qs.length) throw new Error('Зургаас асуулт уншигдсангүй. Тод, бүтэн хуудас зургаар оруулна уу.');
+      const notes = [qs.length + ' асуулт орж ирлээ'];
+      if (quiz.verifyFixed) notes.push(quiz.verifyFixed + ' үг/тоог зурагтай тулгаж зассан');
+      if (quiz.figuresAttached) notes.push(quiz.figuresAttached + ' асуултад зураг хавсаргалаа');
+      setStatus(notes.join(' · '));
+      onParsed(qs);
+    } catch (e) {
+      setErr('Алдаа: ' + (e?.message || 'AI scan'));
+    } finally {
+      setParsing(false);
+    }
+  };
+
   const loadPdf = async (file) => {
     if (!file) return;
     setParsing(true); setErr(''); setStatus('PDF уншиж байна...');
+    let txt = '';
     try {
-      const txt = await extractPdfText(file, (p, n) => setStatus('Хуудас ' + p + ' / ' + n + ' задалж байна...'));
-      setRaw(txt);
-      let fm = {};
+      txt = await extractPdfText(file, (p, n) => setStatus('Хуудас ' + p + ' / ' + n + ' задалж байна...'));
+    } catch (_) { txt = ''; }
+    if (!String(txt || '').trim()) {
+      // Текстгүй (скан) PDF: хуудсыг зураг болгож AI-аар уншина
       try {
-        fm = await extractPdfFigures(file, (p, n) => setStatus('Зураг, диаграмм таслаж байна... ' + p + ' / ' + n));
-      } catch (_) { fm = {}; }
-      setFigs(fm);
-      setStatus('Текст бэлэн · ' + Object.keys(fm).length + ' зураг олдлоо · асуултуудыг задлаж байна...');
-      await runParse(txt, fm);
-    } catch (e) {
-      setParsing(false);
-      setErr('Алдаа: ' + (e?.message || 'PDF'));
+        setStatus('PDF-ийг зураг болгож AI-аар уншиж байна...');
+        const r = await scanPdfToImages(file, setStatus);
+        if (!r.images.length) throw new Error('PDF хуудас уншигдсангүй');
+        if (r.truncated) setErr('PDF ' + r.total + ' хуудастай. Эхний ' + r.images.length + ' хуудсыг уншлаа.');
+        await runAi(r.images, '');
+      } catch (e2) {
+        setParsing(false);
+        setErr('Алдаа: ' + (e2?.message || 'PDF уншигдсангүй. Хуудсыг зураг (JPG/PNG) болгож оруулна уу.'));
+      }
+      return;
     }
+    setRaw(txt);
+    let fm = {};
+    try {
+      fm = await extractPdfFigures(file, (p, n) => setStatus('Зураг, диаграмм таслаж байна... ' + p + ' / ' + n));
+    } catch (_) { fm = {}; }
+    setFigs(fm);
+    setStatus('Текст бэлэн · ' + Object.keys(fm).length + ' зураг олдлоо · асуултуудыг задлаж байна...');
+    await runParse(txt, fm);
+  };
+
+  // Олон файл: PDF + зураг + Word холилдож болно
+  const loadFiles = async (fileList) => {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    setErr('');
+    const pics = [];
+    let pdf = null;
+    for (const f of files) {
+      const name = (f.name || '').toLowerCase();
+      if ((f.type === 'application/pdf' || /\.pdf$/.test(name)) && !pdf) { pdf = f; continue; }
+      if (/\.doc$/.test(name)) { setErr('Хуучин .doc дэмжигдэхгүй. Word дээр «Save as .docx» хийгээд оруулна уу.'); continue; }
+      if (/\.docx$/.test(name)) {
+        setParsing(true); setStatus('Word файл уншиж байна...');
+        try { await runAi([], await scanDocxToText(f)); }
+        catch (e) { setParsing(false); setErr('Алдаа: ' + (e?.message || 'Word')); }
+        continue;
+      }
+      if (/\.(jpe?g|png|webp|bmp|gif|heic|heif)$/.test(name) || /^image\//i.test(f.type || '')) {
+        try {
+          pics.push(await scanCompress(await scanReadFile(f), 2400, 0.9, false));
+        } catch (e) { setErr(e?.message || 'Зураг уншигдсангүй'); }
+      }
+    }
+    if (pics.length) setShotsKeep((prev) => [...prev, ...pics]);
+    if (pdf) { await loadPdf(pdf); return; }
+    if (pics.length) setStatus(pics.length + ' зураг нэмэгдлээ. «✨ AI-аар задлах» дарна уу.');
   };
 
   return (
@@ -3949,7 +4020,7 @@ function PdfImportStep({ onParsed, onManual, onBack, variantCount, onVariantCoun
       <div className="version-indicator" style={{marginBottom:16, flexWrap:'wrap'}}>
         <div className="version-indicator-icon">{vLabel}</div>
         <div className="version-indicator-text" style={{flex:'1 1 160px', minWidth:0}}>
-          <div className="version-indicator-label">Хувилбар {vLabel} — PDF / текст</div>
+          <div className="version-indicator-label">Хувилбар {vLabel} — PDF / зураг / текст</div>
           <div className="version-indicator-sub">Бүх дугаарласан асуултыг алгасалгүй оруулна</div>
         </div>
         {(variantCount || 1) < 5 && (
@@ -3961,7 +4032,7 @@ function PdfImportStep({ onParsed, onManual, onBack, variantCount, onVariantCoun
       <div className="ai-hint-box">
         <div className="ai-icon">📄</div>
         <div className="ai-hint-text">
-          <strong>PDF эсвэл текст импорт</strong> — Текстэн PDF-ээс бүх асуултыг уншиж, зураг/диаграмм/хүснэгтийг автоматаар таслан асуулт бүрт хавсаргана. Скан (зураг) PDF-д OCR байхгүй.
+          <strong>PDF, зураг эсвэл текст импорт</strong> — Текстэн PDF-ээс бүх асуултыг уншиж, зураг/диаграмм/хүснэгтийг автоматаар таслан асуулт бүрт хавсаргана. Скан PDF, цаасан шалгалтын зураг (JPG/PNG) эсвэл Word-ыг AI уншиж асуулт болгоно.
         </div>
       </div>
       {parsing ? (
@@ -3972,10 +4043,23 @@ function PdfImportStep({ onParsed, onManual, onBack, variantCount, onVariantCoun
       ) : (
         <>
           <div className="form-group">
-            <label className="form-label">PDF файл</label>
-            <input type="file" accept="application/pdf,.pdf" className="form-input"
-              onChange={(e) => { const f = e.target.files && e.target.files[0]; loadPdf(f); e.target.value = ''; }} />
+            <label className="form-label">PDF, зураг эсвэл Word файл (олноор)</label>
+            <input type="file" multiple className="form-input"
+              accept="application/pdf,.pdf,image/*,.jpg,.jpeg,.png,.webp,.heic,.heif,.docx"
+              onChange={(e) => { const fl = e.target.files; loadFiles(fl); e.target.value = ''; }} />
+            <div className="form-hint" style={{marginTop:6}}>Текстэн PDF шууд задална. Скан PDF, цаасан шалгалтын зураг, Word-ыг AI уншиж асуулт болгоно.</div>
           </div>
+          {shots.length > 0 && (
+            <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:12}}>
+              {shots.map((s, i) => (
+                <div key={i} style={{position:'relative'}}>
+                  <img src={s} alt="" style={{width:92,height:92,objectFit:'cover',borderRadius:10,border:'1px solid var(--border)'}} />
+                  <button type="button" className="btn btn-ghost btn-sm" style={{position:'absolute',top:0,right:0}}
+                    onClick={() => setShotsKeep(arr => arr.filter((_, j) => j !== i))}>✕</button>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="form-group">
             <label className="form-label">Эсвэл тестийн текст</label>
             <textarea className="form-textarea" style={{minHeight:200,fontFamily:'monospace',fontSize:'0.82rem'}}
@@ -3987,7 +4071,8 @@ function PdfImportStep({ onParsed, onManual, onBack, variantCount, onVariantCoun
             <button className="btn btn-outline" onClick={onBack}>← Буцах</button>
             <div style={{display:'flex',gap:10}}>
               <button className="btn btn-outline" onClick={onManual}>✏ Гараар</button>
-              <button className="btn btn-violet" onClick={() => runParse(raw, figs)} disabled={!raw.trim()}>✨ Бүгдийг задлах</button>
+              <button className="btn btn-violet" onClick={() => (shots.length ? runAi(shots, raw) : runParse(raw, figs))}
+                disabled={!raw.trim() && !shots.length}>{shots.length ? '✨ AI-аар задлах' : '✨ Бүгдийг задлах'}</button>
             </div>
           </div>
         </>
