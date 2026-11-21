@@ -2261,8 +2261,15 @@ const callGradeSubmission = async (payload) => {
   const db = getDb();
   if (!db) throw new Error('Firebase холбогдоогүй');
   const room = roomRef(db, payload.roomId);
-  const keySnap = await room.child('answerKeys').once('value');
-  const allKeys = keySnap.val();
+  // Ангид зориулж материал нь засагдсан/солигдсон бол тухайн ангийн түлхүүрийг ашиглана
+  let allKeys = null;
+  if (payload.classId) {
+    try {
+      const ck = (await db.ref('classes/' + payload.classId + '/examCopies/' + payload.roomId + '/answerKeys').once('value')).val();
+      if (ck && Object.keys(ck).length) allKeys = ck;
+    } catch (_) {}
+  }
+  if (!allKeys) allKeys = (await room.child('answerKeys').once('value')).val();
   if (!allKeys) throw new Error('Answer key уншигдсангүй (DB rules шалгана уу)');
   const label = payload.variantLabel;
   const rawKeys = allKeys[label] || allKeys[Object.keys(allKeys)[0]];
@@ -8503,6 +8510,7 @@ function ExamTaker({ exam, studentName, studentClass, onSubmit, onBack }) {
         try {
           const graded = await callGradeSubmission({
             roomId: exam.id,
+            classId: exam._classId || null,
             answers: ans,
             studentName: submission.studentName,
             studentClass: submission.studentClass,
@@ -9256,10 +9264,22 @@ function StudentHome({ name, onStart, onLogout }) {
   const start = async (t, onlyIds, label) => {
     setBusy(true);
     try {
-      const room = await fetchExamRoomByCode(t.roomId);
+      let room = await fetchExamRoomByCode(t.roomId);
       if (room.stopped) throw new Error('Энэ тестийг багш зогсоосон байна.');
       const db = getDb();
       const uid = getAuth()?.currentUser?.uid;
+      // Энэ ангид зориулж материал нь засагдсан/солигдсон бол (classes/{cid}/examCopies/{rid}) түүгээр ажиллана
+      let copy = null;
+      try { copy = (await db.ref('classes/' + t.cls.id + '/examCopies/' + t.roomId).once('value')).val(); } catch (_) {}
+      if (copy && copy.versions && Object.keys(copy.versions).length) {
+        room = { ...room,
+          versions: copy.versions,
+          title: copy.title || room.title,
+          duration: copy.duration > 0 ? copy.duration : room.duration,
+          passingScore: copy.passingScore != null ? copy.passingScore : room.passingScore,
+          maxAttempts: copy.maxAttempts > 0 ? copy.maxAttempts : room.maxAttempts,
+          scoreMode: copy.scoreMode || room.scoreMode };
+      }
       // Багшийн тохируулсан нэвтрэх цонх: шууд түгжих / хүлээлгийн хугацаа / гараар хаах
       let asg = t;
       try {
@@ -9291,6 +9311,7 @@ function StudentHome({ name, onStart, onLogout }) {
       const doneFull = sortedAttempts(att[t.roomId]).filter(a => a.mode !== 'mistakes').length;
       let st0 = selSet;
       try { st0 = (await roomRef(getDb(), t.roomId).child('settings').once('value')).val() || selSet || {}; } catch (_) {}
+      if (copy && copy.maxAttempts > 0) st0 = { ...(st0 || {}), maxAttempts: copy.maxAttempts };
       const cap = st0?.maxAttempts > 0 ? st0.maxAttempts : (room.maxAttempts > 0 ? room.maxAttempts : 0);
       // Шалгалт: багшийн заасан бүх оролдлогоо дуусгахаас өмнө алдсан асуулт руу орохгүй
       if (onlyIds && isExamKind) {
@@ -9302,7 +9323,11 @@ function StudentHome({ name, onStart, onLogout }) {
       if (!onlyIds && isExamKind && cap > 0 && doneFull >= cap) {
         if (!confirm('⚠️ Та энэ шалгалтын ' + cap + ' оролдлогоо бүгдийг ашигласан байна.\n\nЭнэ удаагийн дүн ТООЦОГДОХГҮЙ (зөвхөн дадлага). Багшид харагдах эцсийн дүн (хамгийн өндөр) өөрчлөгдөхгүй.\n\nҮргэлжлүүлэх үү?')) { setBusy(false); return; }
       }
-      const exam0 = label ? buildExamWithVariant(room, label) : await pickVariantForStudent(room, name, t.cls.name);
+      // Ангийн материал материаллаг хувилбарыг сольсон бол хуучин хувилбарын үсэг байхгүй байж болно
+      let lbl = label;
+      if (copy && lbl && !(copy.versions || {})[lbl]) lbl = Object.keys(copy.versions || {})[0] || '';
+      const exam0 = lbl ? buildExamWithVariant(room, lbl) : await pickVariantForStudent(room, name, t.cls.name);
+      if (copy) exam0._classId = t.cls.id;
       // Шалгалтын бүх оролдлого дууссаны дараах бүтэн дахин өгөлт — дүнд тооцогдохгүй (дасгал горим)
       const extraFull = !onlyIds && isExamKind && cap > 0 && doneFull >= cap;
       onStart(prepareAttempt(exam0, extraFull ? (exam0.questions || []).map(q => q.id) : onlyIds, extraFull), { classId: t.cls.id, kind: t.kind });
@@ -9487,6 +9512,13 @@ function ClassesPage({ exams, onBack }) {
   const [info, setInfo] = useState(null); // exam id
   const [resFor, setResFor] = useState(null); // { rid, mins, secs } — шалгалт удирдах цонх
   const [tick, setTick] = useState(0);       // хүлээлгийн хугацааны тоолуур
+  const [copies, setCopies] = useState({});  // classes/{cid}/examCopies — тухайн ангид зориулсан материал
+  const [edOpen, setEdOpen] = useState(null); // { rid } — материал засах цонх
+  const [edLabel, setEdLabel] = useState('A');
+  const [edAll, setEdAll] = useState({});     // label -> questions[]
+  const [edMeta, setEdMeta] = useState({ title: '', duration: 0, maxAttempts: 0, scoreMode: 'best', passingScore: 60 });
+  const [edBusy, setEdBusy] = useState(false);
+  const [swapFor, setSwapFor] = useState(null); // { rid, from } — материал солих
   useEffect(() => {
     if (!resFor) return;
     const iv = setInterval(() => setTick(t => t + 1), 1000);
@@ -9511,6 +9543,13 @@ function ClassesPage({ exams, onBack }) {
     const m = db.ref('classMembers/' + cur), r = db.ref('classResults/' + cur);
     m.on('value', s => setMembers(s.val() || {})); r.on('value', s => setResults(s.val() || {}));
     return () => { m.off(); r.off(); };
+  }, [cur]);
+  useEffect(() => {
+    if (!cur) { setCopies({}); return; }
+    const db = getDb(); if (!db) return;
+    const r = db.ref('classes/' + cur + '/examCopies');
+    r.on('value', s => setCopies(s.val() || {}));
+    return () => r.off();
   }, [cur]);
 
   const create = async () => {
@@ -9629,10 +9668,20 @@ function ClassesPage({ exams, onBack }) {
   const deleteAssign = async (rid) => {
     const db = getDb(); if (!db || !cur || !rid) return;
     try {
+      // «Устсан бол устсан»: оноолт, дүн, скан, ангийн материал, нэвтрэлтийн бүртгэл хамт устана
       await db.ref('classes/' + cur + '/assignments/' + rid).remove();
+      const up = {};
+      up['classResults/' + cur + '/' + rid] = null;
+      up['zgScans/' + cur + '/' + rid] = null;
+      up['classes/' + cur + '/examCopies/' + rid] = null;
+      mIds.forEach(sid => {
+        up['classMembers/' + cur + '/' + sid + '/joined/' + rid] = null;
+        up['classMembers/' + cur + '/' + sid + '/late/' + rid] = null;
+      });
+      await db.ref().update(up);
       setDelAsk(null);
       setSel({});
-      alert('Ангиас хасагдлаа. (Дүнгийн бүртгэл Firebase дээр хэвээр үлддэг.)');
+      alert('Ангиас бүрмөсөн устлаа: оноолт, дүн, скан, нэвтрэлтийн бүртгэл хамт.');
     } catch (e) { alert('Хасаж чадсангүй: ' + (e?.message || e)); }
   };
 
@@ -9703,6 +9752,109 @@ function ClassesPage({ exams, onBack }) {
     try {
       await db.ref('classMembers/' + cur + '/' + sid + '/late/' + resFor.rid).update({ status, decidedAt: new Date().toISOString() });
     } catch (e) { alert('Хадгалж чадсангүй: ' + (e?.message || e)); }
+  };
+
+  /* ── Ангид зориулсан материал: засах / солих (анхны тест хөндөгдөхгүй) ── */
+  const readClassExamSource = async (rid) => {
+    const db = getDb();
+    const cpy = (await db.ref('classes/' + cur + '/examCopies/' + rid).once('value')).val();
+    if (cpy && cpy.versions && Object.keys(cpy.versions).length) return { ...cpy, fromCopy: true };
+    const [packS, keyS, setS] = await Promise.all([
+      roomRef(db, rid).child('clientPack').once('value'),
+      roomRef(db, rid).child('answerKeys').once('value').catch(() => null),
+      roomRef(db, rid).child('settings').once('value').catch(() => null)
+    ]);
+    const pack = packS.val() || {};
+    let versions = pack.versions;
+    if (!versions) {
+      try { versions = (await roomRef(db, rid).child('versions').once('value')).val() || {}; } catch (_) { versions = {}; }
+    }
+    const st = (setS && setS.val()) || {};
+    return {
+      title: pack.title || ((c?.assignments || {})[rid] || {}).title || 'Тест',
+      duration: Number(pack.duration) || 0,
+      passingScore: pack.passingScore != null ? pack.passingScore : 60,
+      maxAttempts: Number(pack.maxAttempts || st.maxAttempts) || 0,
+      scoreMode: pack.scoreMode || st.scoreMode || 'best',
+      versions: versions || {},
+      answerKeys: (keyS && keyS.val()) || {},
+      fromCopy: false
+    };
+  };
+  const normCopy = (src) => {
+    const out = {};
+    Object.keys(src.versions || {}).forEach(lb => {
+      const raw = src.versions[lb];
+      const qs = unpackQuestions(Array.isArray(raw) ? raw : Object.values(raw || {}));
+      const rawK = (src.answerKeys || {})[lb];
+      const ks = Array.isArray(rawK) ? rawK : Object.values(rawK || {});
+      out[lb] = qs.map((q, i) => ({ ...q, answer: ks[i] ? ks[i].answer : null }));
+    });
+    return out;
+  };
+  const openClassExam = async (rid) => {
+    const db = getDb(); if (!db || !cur) return;
+    try {
+      const src = await readClassExamSource(rid);
+      const all = normCopy(src);
+      const labels = Object.keys(all).sort();
+      if (!labels.length) { alert('Энэ тестийн материал олдсонгүй.'); return; }
+      setEdAll(all); setEdLabel(labels[0]);
+      setEdMeta({ title: src.title || '', duration: Number(src.duration) || 0, maxAttempts: Number(src.maxAttempts) || 0, scoreMode: src.scoreMode || 'best', passingScore: src.passingScore != null ? src.passingScore : 60 });
+      setEdOpen({ rid });
+    } catch (e) { alert('Материал уншиж чадсангүй: ' + (e?.message || e)); }
+  };
+  const patchQ = (fn) => setEdAll(a => ({ ...a, [edLabel]: fn(a[edLabel] || []) }));
+  const setQField = (qi, k, v) => patchQ(list => list.map((q, i) => (i === qi ? { ...q, [k]: v } : q)));
+  const setQOption = (qi, oi, v) => patchQ(list => list.map((q, i) => (i === qi ? { ...q, options: (q.options || []).map((o, k) => (k === oi ? { ...o, text: v } : o)) } : q)));
+  const delQ = (qi) => patchQ(list => list.filter((q, i) => i !== qi));
+  const addQ = () => patchQ(list => [...list, { text: '', type: 'mcq', options: ['A', 'B', 'C', 'D'].map(k => ({ key: k, text: '' })), answer: 'A', topic: '', imageUrl: '', sourceText: '', audioUrl: '', unit: '', left: [] }]);
+  const packFromAll = (all) => {
+    const versions = {}, answerKeys = {};
+    Object.keys(all).sort().forEach(lb => { versions[lb] = packQuestions(all[lb] || []); answerKeys[lb] = packAnswerKeys(all[lb] || []); });
+    return { versions, answerKeys };
+  };
+  const saveClassExam = async () => {
+    const db = getDb(); if (!db || !cur || !edOpen) return;
+    const labels = Object.keys(edAll).sort();
+    if (!labels.some(lb => (edAll[lb] || []).length)) { alert('Дор хаяж 1 асуулт үлдээнэ үү.'); return; }
+    setEdBusy(true);
+    try {
+      const { versions, answerKeys } = packFromAll(edAll);
+      const iso = new Date().toISOString();
+      const title = sanitizeText(edMeta.title || 'Тест', 120);
+      await db.ref('classes/' + cur + '/examCopies/' + edOpen.rid).set({
+        title,
+        duration: Math.max(0, Math.min(600, Number(edMeta.duration) || 0)),
+        passingScore: Math.max(0, Math.min(100, Number(edMeta.passingScore) || 0)),
+        maxAttempts: Math.max(0, Math.min(20, Number(edMeta.maxAttempts) || 0)),
+        scoreMode: edMeta.scoreMode || 'best',
+        versions, answerKeys, editedAt: iso, editedBy: getAuth()?.currentUser?.uid || ''
+      });
+      await db.ref('classes/' + cur + '/assignments/' + edOpen.rid).update({ title, copy: true, copyAt: iso });
+      setEdOpen(null);
+      alert('Хадгалагдлаа · зөвхөн «' + (c?.name || '') + '» ангид үйлчилнэ. Анхны тест өөрчлөгдөөгүй.');
+    } catch (e) { alert('Хадгалж чадсангүй: ' + (e?.message || e)); }
+    setEdBusy(false);
+  };
+  const doSwap = async () => {
+    const db = getDb(); if (!db || !cur || !swapFor || !swapFor.from) return;
+    try {
+      const src = await readClassExamSource(swapFor.from);
+      const all = normCopy(src);
+      if (!Object.keys(all).length) { alert('Сонгосон тестийн материал олдсонгүй.'); return; }
+      const { versions, answerKeys } = packFromAll(all);
+      const iso = new Date().toISOString();
+      const title = sanitizeText(src.title || 'Тест', 120);
+      await db.ref('classes/' + cur + '/examCopies/' + swapFor.rid).set({
+        title, duration: Number(src.duration) || 0, passingScore: src.passingScore != null ? src.passingScore : 60,
+        maxAttempts: Number(src.maxAttempts) || 0, scoreMode: src.scoreMode || 'best',
+        versions, answerKeys, editedAt: iso, editedBy: getAuth()?.currentUser?.uid || '', replacedFrom: swapFor.from
+      });
+      await db.ref('classes/' + cur + '/assignments/' + swapFor.rid).update({ title, copy: true, copyAt: iso });
+      setSwapFor(null);
+      alert('Материал солигдлоо · «' + (c?.name || '') + '» ангид шинэ материал ашиглагдана.');
+    } catch (e) { alert('Солж чадсангүй: ' + (e?.message || e)); }
   };
 
   const openBulk = () => {
@@ -9936,6 +10088,7 @@ function ClassesPage({ exams, onBack }) {
                         <td><input type="checkbox" checked={!!sel[rid]} onChange={e => setSel(s => ({ ...s, [rid]: e.target.checked }))} /></td>
                         <td style={{ fontWeight: 600 }}>
                           <a style={{ cursor: 'pointer', color: 'var(--primary)' }} onClick={() => openRes(rid)}>📄 {t.title || ex.title || 'Тест'}</a>
+                          {copies[rid] && <span className="badge" style={{ marginLeft: 6, background: '#e0e7ff', color: '#3730a3' }}>✏️ Ангид зассан</span>}
                           {t.state === 'closed'
                             ? <span className="badge" style={{ marginLeft: 6, background: '#fee2e2', color: '#b91c1c' }}>Хаалттай</span>
                             : seAssignmentEntry(t).locked
@@ -9950,6 +10103,8 @@ function ClassesPage({ exams, onBack }) {
                           <RowMenu items={[
                             { label: '📊 Үр дүн / удирдах', onClick: () => openRes(rid) },
                             { label: '🔄 Дахин эхлүүлэх', onClick: () => openRes(rid) },
+                            { label: '✏️ Материал засах (энэ ангид)', onClick: () => openClassExam(rid) },
+                            { label: '🔀 Материал солих', onClick: () => setSwapFor({ rid, from: '' }) },
                             { label: 'ℹ Мэдээлэл', onClick: () => setInfo(rid) },
                             { label: '🗑 Устгах', onClick: () => setDelAsk({ type: 'assign', rid, title: t.title, text: '' }) }
                           ]} />
@@ -9980,7 +10135,7 @@ function ClassesPage({ exams, onBack }) {
             <div className="modal-body">
               <div style={{ marginBottom: 10 }}>
                 {delAsk.type === 'assign' ? (
-                  <><b>{delAsk.title || 'Тест'}</b> ангиас хасагдана. Дүнгийн бүртгэл Firebase дээр үлдэнэ.</>
+                  <><b>{delAsk.title || 'Тест'}</b> ангиас <b>бүрмөсөн</b> устана: оноолт, дүн, ZipGrade скан, нэвтрэлтийн бүртгэл хамт. Буцаах боломжгүй.</>
                 ) : (
                   <><b>{delAsk.ids.length} сурагч</b> бүрмөсөн устана: гишүүнчлэл, дүн, оролдлого, скан хуудас хамт. Энэ үйлдлийг буцаах боломжгүй.</>
                 )}
@@ -10252,6 +10407,102 @@ function ClassesPage({ exams, onBack }) {
           </div>
         );
       })()}
+
+      {edOpen && (
+        <div className="modal-overlay" style={{ zIndex: 620 }} onClick={e => e.target === e.currentTarget && setEdOpen(null)}>
+          <div className="modal" style={{ maxWidth: 680 }}>
+            <div className="modal-head">
+              <div style={{ fontFamily: 'Outfit', fontWeight: 800 }}>✏️ Материал засах · {c?.name}</div>
+              <div style={{ fontSize: '.78rem', color: 'var(--text2)' }}>Өөрчлөлт зөвхөн энэ ангид үйлчилнэ. Анхны тест өөрчлөгдөхгүй.</div>
+            </div>
+            <div className="modal-body" style={{ maxHeight: '64vh', overflowY: 'auto' }}>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+                <div style={{ flex: '1 1 200px' }}>
+                  <label className="form-label">Нэр</label>
+                  <input className="form-input" value={edMeta.title} onChange={e => setEdMeta(m => ({ ...m, title: e.target.value }))} />
+                </div>
+                <div style={{ width: 110 }}>
+                  <label className="form-label">Хугацаа (мин)</label>
+                  <input className="form-input" type="number" min="0" max="600" value={edMeta.duration} onChange={e => setEdMeta(m => ({ ...m, duration: e.target.value }))} />
+                </div>
+                <div style={{ width: 100 }}>
+                  <label className="form-label">Оролдлого</label>
+                  <input className="form-input" type="number" min="0" max="20" value={edMeta.maxAttempts} onChange={e => setEdMeta(m => ({ ...m, maxAttempts: e.target.value }))} />
+                </div>
+                <div style={{ width: 130 }}>
+                  <label className="form-label">Дүн тооцох</label>
+                  <select className="form-select" value={edMeta.scoreMode} onChange={e => setEdMeta(m => ({ ...m, scoreMode: e.target.value }))}>
+                    <option value="best">Хамгийн өндөр</option>
+                    <option value="avg">Дундаж</option>
+                    <option value="last">Сүүлийн</option>
+                  </select>
+                </div>
+              </div>
+              {Object.keys(edAll).length > 1 && (
+                <div className="seg" style={{ marginBottom: 10, flexWrap: 'wrap' }}>
+                  {Object.keys(edAll).sort().map(lb => (
+                    <button key={lb} className={'seg-b' + (edLabel === lb ? ' on' : '')} onClick={() => setEdLabel(lb)}>{lb} хувилбар ({(edAll[lb] || []).length})</button>
+                  ))}
+                </div>
+              )}
+              {(edAll[edLabel] || []).map((q, qi) => (
+                <div key={qi} style={{ border: '1px solid var(--border)', borderRadius: 10, padding: '10px 12px', marginBottom: 10 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <b>#{qi + 1}</b>
+                    <span className="badge">{q.type || 'mcq'}</span>
+                    <button className="btn btn-red btn-sm" style={{ marginLeft: 'auto' }} onClick={() => delQ(qi)}>🗑 Асуулт устгах</button>
+                  </div>
+                  <textarea className="form-textarea" rows={2} style={{ marginTop: 6 }} placeholder="Асуултын текст" value={q.text || ''} onChange={e => setQField(qi, 'text', e.target.value)} />
+                  {(q.options || []).length > 0 ? (
+                    <div style={{ marginTop: 6 }}>
+                      {(q.options || []).map((o, oi) => (
+                        <div key={String(o.key) + oi} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                          <button className={'btn btn-sm ' + (String(q.answer) === String(o.key) ? 'btn-green' : 'btn-outline')} style={{ minWidth: 46 }}
+                            onClick={() => setQField(qi, 'answer', o.key)} title="Зөв хариулт">{o.key}</button>
+                          <input className="form-input" value={o.text || ''} onChange={e => setQOption(qi, oi, e.target.value)} placeholder={'Хариулт ' + o.key} />
+                        </div>
+                      ))}
+                      <div className="form-hint">Ногоон товч = зөв хариулт</div>
+                    </div>
+                  ) : (
+                    <div className="form-group" style={{ marginTop: 6 }}>
+                      <label className="form-label">Зөв хариулт</label>
+                      <input className="form-input" value={q.answer == null ? '' : q.answer} onChange={e => setQField(qi, 'answer', e.target.value)} />
+                    </div>
+                  )}
+                </div>
+              ))}
+              <button className="btn btn-outline btn-sm" onClick={addQ}>＋ Асуулт нэмэх</button>
+            </div>
+            <div className="modal-foot" style={{ gap: 8, flexWrap: 'wrap' }}>
+              <button className="btn btn-outline" onClick={() => setEdOpen(null)}>Болих</button>
+              <button className="btn btn-primary" disabled={edBusy} onClick={saveClassExam}>{edBusy ? '⏳ Хадгалж байна...' : '💾 Хадгалах'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {swapFor && (
+        <div className="modal-overlay" style={{ zIndex: 620 }}>
+          <div className="modal" style={{ maxWidth: 460 }}>
+            <div className="modal-head"><div style={{ fontFamily: 'Outfit', fontWeight: 800 }}>🔀 Материал солих · {c?.name}</div></div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label className="form-label">Аль тестийн материалаар солих вэ?</label>
+                <select className="form-select" value={swapFor.from} onChange={e => setSwapFor(s => ({ ...s, from: e.target.value }))}>
+                  <option value="">— тест сонгох —</option>
+                  {exams.filter(e => e.id !== swapFor.rid).map(e => <option key={e.id} value={e.id}>{e.title}</option>)}
+                </select>
+              </div>
+              <div className="form-hint">Сонгосон тестийн асуултууд зөвхөн энэ ангийн оноолтод хуулагдана. Анхны тестүүд өөрчлөгдөхгүй.</div>
+            </div>
+            <div className="modal-foot" style={{ gap: 8 }}>
+              <button className="btn btn-outline" onClick={() => setSwapFor(null)}>Болих</button>
+              <button className="btn btn-primary" disabled={!swapFor.from} onClick={doSwap}>🔀 Солих</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {zgBig && (
         <div className="modal-overlay" style={{ zIndex: 400 }} onClick={() => setZgBig('')}>
@@ -11034,13 +11285,37 @@ function App() {
     history.pushState({ se: 'teacher' }, '', appUrlWithHash('teacher'));
   }, []);
 
-  const deleteExam = useCallback((exam) => {
+  const deleteExam = useCallback(async (exam) => {
     if (!exam?.id) return;
-    setExams(prev => prev.filter(e => e.id !== exam.id));
-    setSubmissions(prev => prev.filter(s => s.examId !== exam.id));
+    const rid = exam.id;
+    setExams(prev => prev.filter(e => e.id !== rid));
+    setSubmissions(prev => prev.filter(s => s.examId !== rid));
     const db = getDb();
     if (db) {
-      try { roomRef(db, exam.id).remove(); } catch {}
+      try { roomRef(db, rid).remove(); } catch {}
+      // «Устсан бол устсан»: ангийн оноолт, дүн, скан, нэвтрэлт, ангийн материал хамт устана
+      try {
+        const me = getAuth()?.currentUser?.uid;
+        const snap = await db.ref('classes').orderByChild('teacherUid').equalTo(me).once('value');
+        const cls = snap.val() || {};
+        const up = {};
+        for (const cid of Object.keys(cls)) {
+          if (!((cls[cid] || {}).assignments || {})[rid]) continue;
+          up['classes/' + cid + '/assignments/' + rid] = null;
+          up['classes/' + cid + '/examCopies/' + rid] = null;
+          up['classResults/' + cid + '/' + rid] = null;
+          up['zgScans/' + cid + '/' + rid] = null;
+          try {
+            const ms = (await db.ref('classMembers/' + cid).once('value')).val() || {};
+            Object.keys(ms).forEach(sid => {
+              up['classMembers/' + cid + '/' + sid + '/joined/' + rid] = null;
+              up['classMembers/' + cid + '/' + sid + '/late/' + rid] = null;
+            });
+          } catch (_) {}
+        }
+        if (Object.keys(up).length) await db.ref().update(up);
+        try { await db.ref('users/' + me + '/exams/' + rid).remove(); } catch (_) {}
+      } catch (e) { console.warn('delete cleanup', e); }
     }
   }, [setExams, setSubmissions]);
 
