@@ -50,6 +50,59 @@ window.__SE_FB_CONFIG__ = {
   databaseURL: "https://shalgalt-6933b-default-rtdb.asia-southeast1.firebasedatabase.app"
 };
 window.__SE_IS_QR__ = (location.hash || '').indexOf('#qr=') === 0;
+/* ─── ЛОКАЛ ХАДГАЛАЛТЫГ ХААХ ─────────────────────────────────────────────────
+   Сурагч/багшийн төхөөрөмж дээр ямар ч өгөгдөл (нэр, эрх, тест, скан, токен) бичигдэхгүй.
+   localStorage руу бичих оролдлого нь зөвхөн санах ойд (тухайн хуудас нээлттэй байх хугацаанд)
+   үлдэж, хуудас хаагдахад/refresh хийхэд бүрэн арилна. Хуучин хувилбарын үлдсэн
+   бичлэгүүдийг энэ блок ачааллахдаа шууд устгана.
+   Зөвхөн админы өөрийн хөтөч дээр хэрэгтэй 3 түлхүүр л бодитоор хадгалагдана. */
+(function () {
+  try {
+    var ALLOW = { se_admin_tok: 1, se_static_teachers: 1, se_firebase_config: 1 };
+    var mem = {};
+    var proto = window.Storage && window.Storage.prototype;
+    if (!proto || proto.__seNoLocal) return;
+    try { proto.__seNoLocal = true; } catch (e) {}
+    var g = proto.getItem, s = proto.setItem, r = proto.removeItem, kAt = proto.key;
+    var isLocal = function (st) { try { return st === window.localStorage; } catch (e) { return false; } };
+    proto.getItem = function (k) {
+      k = String(k);
+      if (isLocal(this) && !ALLOW[k]) return Object.prototype.hasOwnProperty.call(mem, k) ? mem[k] : null;
+      return g.call(this, k);
+    };
+    proto.setItem = function (k, v) {
+      k = String(k); v = String(v);
+      if (isLocal(this) && !ALLOW[k]) { mem[k] = v; return; }
+      return s.call(this, k, v);
+    };
+    proto.removeItem = function (k) {
+      k = String(k);
+      if (isLocal(this) && !ALLOW[k]) { delete mem[k]; return; }
+      return r.call(this, k);
+    };
+    proto.key = function (i) {
+      if (isLocal(this)) { var ks = Object.keys(mem); var n = Number(i) || 0; return n < ks.length ? ks[n] : null; }
+      return kAt.call(this, i);
+    };
+    /* Хуучин хувилбарын үлдэгдлийг шууд арилгах */
+    try {
+      var ls = window.localStorage, dead = [];
+      for (var i = 0; i < ls.length; i++) { var kk = kAt.call(ls, i); if (kk && !ALLOW[kk]) dead.push(kk); }
+      dead.forEach(function (kk) { r.call(ls, kk); });
+    } catch (e) {}
+    /* Firebase Auth нэвтрэлтийн IndexedDB үлдэгдлийг ч арилгана */
+    try {
+      if (window.indexedDB && indexedDB.databases) {
+        indexedDB.databases().then(function (list) {
+          (list || []).forEach(function (d) {
+            var n = d && d.name;
+            if (n === 'firebaseLocalStorageDb') { try { indexedDB.deleteDatabase(n); } catch (e) {} }
+          });
+        }).catch(function () {});
+      }
+    } catch (e) {}
+  } catch (e) {}
+})();
 (function () {
   function getApp() {
     try {
@@ -62,7 +115,7 @@ window.__SE_IS_QR__ = (location.hash || '').indexOf('#qr=') === 0;
   var app = getApp();
   if (!app || !firebase.auth) return;
   var auth = firebase.auth(app);
-  try { auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL); } catch (e) {}
+  try { auth.setPersistence(firebase.auth.Auth.Persistence.NONE); } catch (e) {} // төхөөрөмж дээр токен хадгалахгүй
   var authWarm = (auth.authStateReady ? auth.authStateReady() : Promise.resolve()).then(function () {
     if (auth.currentUser) return auth.currentUser;
     return auth.signInAnonymously().then(function (c) { return c.user; });
@@ -2098,7 +2151,7 @@ const ensureStudentAuth = async () => {
   }
   try { if (auth.authStateReady) await auth.authStateReady(); } catch {}
   if (auth.currentUser) return auth.currentUser;
-  try { await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL); } catch {}
+  try { await auth.setPersistence(firebase.auth.Auth.Persistence.NONE); } catch {}
   const cred = await auth.signInAnonymously();
   return cred.user;
 };
