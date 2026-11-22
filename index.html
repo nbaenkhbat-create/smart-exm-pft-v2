@@ -2108,7 +2108,7 @@ img, svg, video, canvas { max-width: 100%; }
 .zgrow-sub { font-size: .8rem; color: var(--text2); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .zgrow-score { font: 800 1.2rem 'Outfit', sans-serif; }
 .zgrow-go { color: var(--text3); font-size: 1.4rem; line-height: 1; }
-/* ─── ШАЛГАЛТ: чит хамгаалалт + гар утасны тогтвортой байдал ─── */
+/* ─── ШАЛГАЛТ: cheat хамгаалалт + гар утасны тогтвортой байдал ─── */
 .exam-taking-root { overflow-x: clip; touch-action: pan-y pinch-zoom; }
 .exam-taking-root .question-block, .exam-taking-root .card, .exam-taking-root .ac-doc { transform: none !important; transition: none !important; animation: none !important; }
 .exam-taking-root.ac-on { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
@@ -2758,7 +2758,7 @@ const packExamForQR = (exam, classKey, cfg) => ({
   ...(cfg ? { q: cfg } : {})
 });
 
-// QR-д суулгасан тохиргоо (k: e=шалгалт / p=дасгал, d: минут, p: босго %, m: дүнгийн горим, a: оролдлогын тоо, ac: чит хамгаалалт, i: QR-ийн id)
+// QR-д суулгасан тохиргоо (k: e=шалгалт / p=дасгал, d: минут, p: босго %, m: дүнгийн горим, a: оролдлогын тоо, ac: cheat хамгаалалт, i: QR-ийн id)
 const applyQrCfg = (exam, cfg) => {
   if (!cfg || !exam) return exam;
   const o = { ...exam, qrCfg: cfg, qrKind: cfg.k === 'p' ? 'practice' : 'exam', qrLink: cfg.i || '' };
@@ -6097,7 +6097,7 @@ function CreateExam({ onSave, onCancel, initialExam, hasResults }) {
                 <label className="form-label" style={{display:'flex',gap:8,alignItems:'center'}}>
                   <input type="checkbox" checked={info.antiCheat !== false}
                     onChange={e => setInfo(p => ({...p, antiCheat: e.target.checked}))} />
-                  Чит хамгаалалт (таб солих, фокус алдах)
+                  Cheat хамгаалалт (таб солих, фокус алдах)
                 </label>
               </div>
               <div className="form-group">
@@ -6412,7 +6412,7 @@ function QRHubModal({ exam, onClose, onOpenResults, onSaveLinks, onLegacy }) {
                   <button className={seg(kind === 'e')} style={{flex:1}} onClick={() => pickKind('e')}>🎓 Шалгалтын QR</button>
                   <button className={seg(kind === 'p')} style={{flex:1}} onClick={() => pickKind('p')}>📝 Дасгалын QR</button>
                 </div>
-                <div className="form-hint">{kind === 'e' ? 'Шалгалт: дүн «Шалгалт» хэсэгт орно, чит хамгаалалт, хугацаатай байж болно.' : 'Дасгал: дүн тусдаа «Дасгал» хэсэгт орно, хугацаагүй, хязгааргүй оролдлоготой байж болно.'}</div>
+                <div className="form-hint">{kind === 'e' ? 'Шалгалт: дүн «Шалгалт» хэсэгт орно, cheat хамгаалалт, хугацаатай байж болно.' : 'Дасгал: дүн тусдаа «Дасгал» хэсэгт орно, хугацаагүй, хязгааргүй оролдлоготой байж болно.'}</div>
               </div>
               <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
                 <div className="form-group">
@@ -6440,7 +6440,7 @@ function QRHubModal({ exam, onClose, onOpenResults, onSaveLinks, onLegacy }) {
                 </div>
               </div>
               <label style={{display:'flex',gap:8,alignItems:'center',fontSize:'0.88rem',marginTop:4}}>
-                <input type="checkbox" checked={!!f.ac} onChange={setField('ac')} /> Чит хамгаалалт асаах
+                <input type="checkbox" checked={!!f.ac} onChange={setField('ac')} /> Cheat хамгаалалт асаах
               </label>
               {links.length > 0 && (
                 <div style={{marginTop:18}}>
@@ -6984,7 +6984,7 @@ function CheatDetailModal({ sub, onClose }) {
       <div className="modal" style={{maxWidth:520}}>
         <div className="modal-head">
           <div>
-            <div style={{fontFamily:'Outfit',fontWeight:800,fontSize:'1.1rem'}}>🔍 Чит тайлан — {sub.studentName}</div>
+            <div style={{fontFamily:'Outfit',fontWeight:800,fontSize:'1.1rem'}}>🔍 Cheat тайлан — {sub.studentName}</div>
             <div style={{fontSize:'0.8rem',color:'var(--text2)'}}>{sub.studentClass} · {log.length} удаа сэжигтэй үйлдэл</div>
           </div>
         </div>
@@ -6992,7 +6992,7 @@ function CheatDetailModal({ sub, onClose }) {
           {log.length === 0 ? (
             <div style={{textAlign:'center',padding:'24px',color:'var(--green)'}}>
               <div style={{fontSize:'2rem',marginBottom:8}}>✅</div>
-              <div style={{fontWeight:700}}>Чит илрээгүй</div>
+              <div style={{fontWeight:700}}>Cheat илрээгүй</div>
             </div>
           ) : (
             <>
@@ -8224,7 +8224,7 @@ function ExamIntro({ exam, studentName, studentClass, onStart, onBack }) {
             {examDurationOf(exam) > 0
               ? '⚠️ Шалгалт эхэлсэн даруйд хугацааны тоолол эхэлнэ. Анхааралтай уншаарай.'
               : '⏱ Энэ шалгалт цаггүй. Дууссаны дараа «Дуусгах» дарна уу.'}
-            {exam.antiCheat === false ? ' · Чит хамгаалалт унтраалттай.' : ''}
+            {exam.antiCheat === false ? ' · Cheat хамгаалалт унтраалттай.' : ''}
           </div>
         </div>
         <div className="modal-foot">
@@ -8281,7 +8281,7 @@ function ExamTaker({ exam, studentName, studentClass, onSubmit, onBack }) {
     setTimeout(() => setShowFlash(false), 400);
   }, [cheatExempt, antiOn]);
 
-  // Шалгалт эхэлсний дараа л чит хяналт идэвхжинэ (эхний 5 сек — zoom/focus алдаа)
+  // Шалгалт эхэлсний дараа л cheat хяналт идэвхжинэ (эхний 5 сек — zoom/focus алдаа)
   useEffect(() => {
     cheatArmedRef.current = false;
     cheatGraceUntilRef.current = Date.now() + 5000;
@@ -8415,7 +8415,7 @@ function ExamTaker({ exam, studentName, studentClass, onSubmit, onBack }) {
       const dScale = Math.abs(m.scale - vpLast.scale);
       vpLast = { w: m.w, h: m.h, scale: m.scale };
 
-      // Pinch / browser zoom — scale өөрчлөгдвөл чит биш
+      // Pinch / browser zoom — scale өөрчлөгдвөл cheat биш
       if (dScale > 0.04) return;
       if (dw + dh < 90) return;
 
@@ -8574,7 +8574,7 @@ function ExamTaker({ exam, studentName, studentClass, onSubmit, onBack }) {
     })();
   }, [answers, exam, studentName, studentClass, onSubmit]);
 
-  // ─── ХАТУУ ЧИТ ХАМГААЛАЛТ: шалгалтын цонхноос гарвал агуулга нуугдаж, 3 удаа гарвал автоматаар дуусна ───
+  // ─── ХАТУУ CHEAT ХАМГААЛАЛТ: шалгалтын цонхноос гарвал агуулга нуугдаж, 3 удаа гарвал автоматаар дуусна ───
   const MAX_STRIKES = 3;
   const [away, setAway] = useState(false);
   const strikes = cheatLog.filter(e => ['TAB_SWITCH', 'WINDOW_BLUR', 'SPLIT_SCREEN', 'TRANSLATE', 'FULLSCREEN_EXIT', 'SIDE_PANEL'].includes(e.type)).length;
@@ -8651,7 +8651,7 @@ function ExamTaker({ exam, studentName, studentClass, onSubmit, onBack }) {
       {/* Cheat warning toast */}
       {cheatWarning && antiOn && !cheatExempt && (
         <div className="cheat-warning">
-          <span className="cheat-badge">⚠ ЧИТ</span>
+          <span className="cheat-badge">⚠ CHEAT</span>
           {cheatWarning}
         </div>
       )}
@@ -8693,7 +8693,7 @@ function ExamTaker({ exam, studentName, studentClass, onSubmit, onBack }) {
         <div style={{display:'flex',alignItems:'center',gap:10}}>
           {cheatCnt > 0 && antiOn && !cheatExempt && (
             <div style={{background:'var(--red-light)',color:'var(--red)',padding:'5px 12px',borderRadius:20,fontSize:'0.78rem',fontWeight:700}}>
-              ⚠ {cheatCnt} чит
+              ⚠ {cheatCnt} cheat
             </div>
           )}
           <div className={`timer-badge ${timed ? timerClass : ''}`}>
@@ -9332,7 +9332,8 @@ function StudentHome({ name, onStart, onLogout }) {
         room = { ...room,
           versions: copy.versions,
           title: copy.title || room.title,
-          duration: copy.duration > 0 ? copy.duration : room.duration,
+          duration: copy.noTimeLimit ? 0 : (copy.duration > 0 ? copy.duration : room.duration),
+          antiCheat: copy.antiCheat !== false,
           passingScore: copy.passingScore != null ? copy.passingScore : room.passingScore,
           maxAttempts: copy.maxAttempts > 0 ? copy.maxAttempts : room.maxAttempts,
           scoreMode: copy.scoreMode || room.scoreMode };
@@ -9868,6 +9869,8 @@ function ClassesPage({ exams, onBack }) {
       passingScore: pack.passingScore != null ? pack.passingScore : 60,
       maxAttempts: Number(pack.maxAttempts || st.maxAttempts) || 0,
       scoreMode: pack.scoreMode || st.scoreMode || 'best',
+      antiCheat: pack.antiCheat !== false,
+      noTimeLimit: !(Number(pack.duration) > 0),
       versions: versions || {},
       answerKeys: (keyS && keyS.val()) || {},
       fromCopy: false
@@ -9892,7 +9895,7 @@ function ClassesPage({ exams, onBack }) {
       const labels = Object.keys(all).sort();
       if (!labels.length) { alert('Энэ тестийн материал олдсонгүй.'); return; }
       setEdAll(all); setEdLabel(labels[0]);
-      setEdMeta({ title: src.title || '', duration: Number(src.duration) || 0, maxAttempts: Number(src.maxAttempts) || 0, scoreMode: src.scoreMode || 'best', passingScore: src.passingScore != null ? src.passingScore : 60 });
+      setEdMeta({ title: src.title || '', duration: Number(src.duration) || 0, maxAttempts: Number(src.maxAttempts) || 0, scoreMode: src.scoreMode || 'best', passingScore: src.passingScore != null ? src.passingScore : 60, antiCheat: src.antiCheat !== false, noTimeLimit: src.noTimeLimit === true || !(Number(src.duration) > 0) });
       setEdOpen({ rid });
     } catch (e) { alert('Материал уншиж чадсангүй: ' + (e?.message || e)); }
   };
@@ -9917,7 +9920,9 @@ function ClassesPage({ exams, onBack }) {
       const title = sanitizeText(edMeta.title || 'Тест', 120);
       await db.ref('classes/' + cur + '/examCopies/' + edOpen.rid).set({
         title,
-        duration: Math.max(0, Math.min(600, Number(edMeta.duration) || 0)),
+        duration: edMeta.noTimeLimit ? 0 : Math.max(0, Math.min(600, Number(edMeta.duration) || 0)),
+        noTimeLimit: !!edMeta.noTimeLimit,
+        antiCheat: edMeta.antiCheat !== false,
         passingScore: Math.max(0, Math.min(100, Number(edMeta.passingScore) || 0)),
         maxAttempts: Math.max(0, Math.min(20, Number(edMeta.maxAttempts) || 0)),
         scoreMode: edMeta.scoreMode || 'best',
@@ -10537,9 +10542,20 @@ function ClassesPage({ exams, onBack }) {
                   <label className="form-label">Нэр</label>
                   <input className="form-input" value={edMeta.title} onChange={e => setEdMeta(m => ({ ...m, title: e.target.value }))} />
                 </div>
-                <div style={{ width: 110 }}>
+                <div style={{ width: 120 }}>
                   <label className="form-label">Хугацаа (мин)</label>
-                  <input className="form-input" type="number" min="0" max="600" value={edMeta.duration} onChange={e => setEdMeta(m => ({ ...m, duration: e.target.value }))} />
+                  <input className="form-input" type="number" min="0" max="600" disabled={!!edMeta.noTimeLimit}
+                    value={edMeta.noTimeLimit ? '' : edMeta.duration}
+                    onChange={e => setEdMeta(m => ({ ...m, duration: e.target.value, noTimeLimit: false }))} />
+                  <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: '.78rem', marginTop: 4 }}>
+                    <input type="checkbox" checked={!!edMeta.noTimeLimit}
+                      onChange={e => setEdMeta(m => ({ ...m, noTimeLimit: e.target.checked, duration: e.target.checked ? 0 : (m.duration || 45) }))} />
+                    Цаггүй
+                  </label>
+                </div>
+                <div style={{ width: 120 }}>
+                  <label className="form-label">Тэнцэх босго (%)</label>
+                  <input className="form-input" type="number" min="0" max="100" value={edMeta.passingScore} onChange={e => setEdMeta(m => ({ ...m, passingScore: e.target.value }))} />
                 </div>
                 <div style={{ width: 100 }}>
                   <label className="form-label">Оролдлого</label>
@@ -10552,6 +10568,13 @@ function ClassesPage({ exams, onBack }) {
                     <option value="avg">Дундаж</option>
                     <option value="last">Сүүлийн</option>
                   </select>
+                </div>
+                <div style={{ flex: '1 1 100%' }}>
+                  <label className="form-label" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <input type="checkbox" checked={edMeta.antiCheat !== false}
+                      onChange={e => setEdMeta(m => ({ ...m, antiCheat: e.target.checked }))} />
+                    Cheat хамгаалалт (таб солих, фокус алдах)
+                  </label>
                 </div>
               </div>
               {Object.keys(edAll).length > 1 && (
