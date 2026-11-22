@@ -9270,7 +9270,7 @@ function StudentHome({ name, onStart, onLogout }) {
       const handler = sn => {
         const v = sn.val();
         if (!v) data.delete(cid2);
-        else data.set(cid2, { id: cid2, name: v.name, teacherName: v.teacherName || '', tests: Object.entries(v.assignments || {}).filter(([, a]) => !a.zgOnly).map(([roomId, a]) => ({ roomId, ...a })) });
+        else data.set(cid2, { id: cid2, name: v.name, teacherName: v.teacherName || '', tests: Object.entries(v.assignments || {}).filter(([, a]) => !a.zgOnly && a.state !== 'closed').map(([roomId, a]) => ({ roomId, ...a })) });
         push();
       };
       bound.set(cid2, { ref, handler });
@@ -9838,8 +9838,14 @@ function ClassesPage({ exams, onBack }) {
   };
   const closeAssign = async () => {
     const db = getDb(); if (!db || !cur || !resFor) return;
-    await db.ref('classes/' + cur + '/assignments/' + resFor.rid).update({ state: 'closed' });
-    alert('Хаагдлаа · сурагчид шинээр нэвтрэх боломжгүй.');
+    await db.ref('classes/' + cur + '/assignments/' + resFor.rid).update({ state: 'closed', closedAt: new Date().toISOString() });
+    alert('Хаагдлаа · сурагчдын жагсаалтаас арилж, шинээр нэвтрэх боломжгүй.');
+  };
+  const reopenAssign = async () => {
+    const db = getDb(); if (!db || !cur || !resFor) return;
+    const iso = new Date().toISOString();
+    await db.ref('classes/' + cur + '/assignments/' + resFor.rid).update({ state: 'open', mode: 'manual', openedAt: iso, startsAt: iso, entrySec: 0, entryMinutes: 0, reopenedAt: iso });
+    alert('Дахин нээгдлээ · сурагчдын жагсаалтад дахин харагдаж, нэвтэрч болно.');
   };
   const setLateStatus = async (sid, status) => {
     const db = getDb(); if (!db || !cur || !resFor) return;
@@ -10487,6 +10493,7 @@ function ClassesPage({ exams, onBack }) {
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
                   <button className="btn btn-green btn-sm" onClick={startAssignNow}>▶ Шууд эхлүүлэх</button>
+                  {!isOpen && <button className="btn btn-primary btn-sm" onClick={reopenAssign}>🔓 Дахин нээх</button>}
                   <button className="btn btn-red btn-sm" disabled={!isOpen} onClick={closeAssign}>⛔ Хаах</button>
                   {mIds.length - did.length > 0 && <span style={{ fontSize: '.78rem', color: 'var(--text2)', alignSelf: 'center' }}>Өгөөгүй: {mIds.length - did.length}</span>}
                 </div>
