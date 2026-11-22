@@ -9086,11 +9086,22 @@ const saveAttempt = async (sub, exam, meta) => {
   try {
     await db.ref('attempts/' + u.uid + '/' + exam.id + '/' + sub.id).set(rec);
     await db.ref('classResults/' + meta.classId + '/' + exam.id + '/' + u.uid + '/' + sub.id)
-      .set({ name: u.displayName || 'Сурагч', at: rec.at, score: rec.score, sec: rec.sec, mode: rec.mode, extra: !!rec.extra });
+      .set({ name: u.displayName || 'Сурагч', at: rec.at, score: rec.score, sec: rec.sec, mode: rec.mode, extra: !!rec.extra, round: rec.round || null });
   } catch (e) { console.warn('saveAttempt', e); }
 };
 const fmtDate = iso => { try { return new Date(iso).toLocaleString('mn-MN', { dateStyle: 'short', timeStyle: 'short' }); } catch { return iso || ''; } };
 const sortedAttempts = obj => Object.entries(obj || {}).map(([id, v]) => ({ id, ...v })).sort((a, b) => (a.at || '').localeCompare(b.at || ''));
+// Оноолтын үе: багш шалгалтыг ангиас устгаж дахин оноосон бол өмнөх үеийн
+// оролдлого/дүн харагдахгүй. round байхгүй хуучин бүртгэлд оноосон огноогоор шалгана.
+const seInRound = (a, asg) => {
+  if (!a) return false;
+  const r = (asg && asg.round) || '';
+  if (r && a.round) return a.round === r;
+  const start = Date.parse((asg && asg.at) || '') || 0;
+  const at = Date.parse(a.at || '') || 0;
+  if (start && at) return at >= start - 60000; // цагийн бага зөрүүг тэсвэрлэнэ
+  return true;
+};
 
 /* ── Шалгалт руу нэвтрэх цонх ───────────────────────────────────────────────
    mode: 'now'       — багш «Шууд эхлүүлэх» дарсан даруйд түгжинэ
@@ -9357,8 +9368,7 @@ function StudentHome({ name, onStart, onLogout }) {
         return;
       }
       const isExamKind = t.kind !== 'practice';
-      const myRound = asg.round || '';
-      const doneFull = sortedAttempts(att[t.roomId]).filter(a => a.mode !== 'mistakes' && (!myRound || a.round === myRound)).length;
+      const doneFull = sortedAttempts(att[t.roomId]).filter(a => a.mode !== 'mistakes' && seInRound(a, asg)).length;
       let st0 = selSet;
       try { st0 = (await roomRef(getDb(), t.roomId).child('settings').once('value')).val() || selSet || {}; } catch (_) {}
       if (copy && copy.maxAttempts > 0) st0 = { ...(st0 || {}), maxAttempts: copy.maxAttempts };
@@ -9386,8 +9396,8 @@ function StudentHome({ name, onStart, onLogout }) {
     setBusy(false);
   };
   // Оноолтын үе (round) солигдсон бол өмнөх үеийн оролдлогыг харуулахгүй
-  const selRound = (selAsg && selAsg.round) || (sel && sel.round) || '';
-  const list = sel ? sortedAttempts(att[sel.roomId]).filter(a => !selRound || a.round === selRound) : [];
+  const selAsgFull = sel ? { ...sel, ...(selAsg || {}) } : null;
+  const list = sel ? sortedAttempts(att[sel.roomId]).filter(a => seInRound(a, selAsgFull)) : [];
   const last = list[list.length - 1];
   const wrong = last?.wrongIds || [];
   // Firebase хоосон жагсаалтыг хадгалдаггүй тул 100% оролдлого wrongIds-гүй ирнэ — алдаагүй гэж үзнэ
@@ -9411,7 +9421,7 @@ function StudentHome({ name, onStart, onLogout }) {
       </div></div>
       {!tests.length && <div style={{ color: 'var(--text2)' }}>Одоогоор тест алга. Багшийн өгсөн ангийн кодоор ангидаа нэгдээрэй.</div>}
       {tests.map(t => {
-        const l = sortedAttempts(att[t.roomId]).filter(a => !t.round || a.round === t.round); const lw = l[l.length - 1]?.wrongIds;
+        const l = sortedAttempts(att[t.roomId]).filter(a => seInRound(a, t)); const lw = l[l.length - 1]?.wrongIds;
         return (
           <div key={t.cls.id + t.roomId} className="exam-card" style={{ marginBottom: 10, cursor: 'pointer' }} onClick={() => { setSel(t); setChoose(false); }}>
             <div className="exam-card-title">{t.title}</div>
@@ -9613,7 +9623,22 @@ function ClassesPage({ exams, onBack }) {
   };
 
   const c = classes.find(x => x.id === cur);
-  const results = (() => { const o = { ...resultsRaw }; Object.entries(c?.zg || {}).forEach(([rid, bySid]) => { o[rid] = { ...(o[rid] || {}) }; Object.entries(bySid || {}).forEach(([sid, att]) => { o[rid][sid] = { ...(o[rid][sid] || {}), ...att }; }); }); return o; })();
+  const results = (() => {
+    const o = { ...resultsRaw };
+    Object.entries(c?.zg || {}).forEach(([rid, bySid]) => {
+      o[rid] = { ...(o[rid] || {}) };
+      Object.entries(bySid || {}).forEach(([sid, att]) => { o[rid][sid] = { ...(o[rid][sid] || {}), ...att }; });
+    });
+    // Устгаж дахин оноосон бол өмнөх үеийн дүн багшид харагдахгүй
+    Object.keys(o).forEach(rid => {
+      const asg = (c?.assignments || {})[rid];
+      if (!asg) return;
+      Object.keys(o[rid] || {}).forEach(sid => {
+        o[rid][sid] = Object.fromEntries(Object.entries(o[rid][sid] || {}).filter(([, a]) => seInRound(a, asg)));
+      });
+    });
+    return o;
+  })();
   const allTests = Object.entries(c?.assignments || {});
   const tests = allTests;
   const modeOf = (rid) => exams.find(e => e.id === rid)?.scoreMode || 'best';
@@ -9723,13 +9748,15 @@ function ClassesPage({ exams, onBack }) {
     try {
       // «Устсан бол устсан»: оноолт, дүн, скан, ангийн материал, нэвтрэлтийн бүртгэл хамт устана
       await db.ref('classes/' + cur + '/assignments/' + rid).remove();
-      const up = {};
-      up['classResults/' + cur + '/' + rid] = null;
-      up['zgScans/' + cur + '/' + rid] = null;
-      up['classes/' + cur + '/examCopies/' + rid] = null;
+      // Зам бүрийг тусад нь устгана: нэг замд хориг таарвал бусдын устгал зогсохгүй
+      const jobs = [
+        db.ref('classResults/' + cur + '/' + rid).remove(),
+        db.ref('zgScans/' + cur + '/' + rid).remove(),
+        db.ref('classes/' + cur + '/examCopies/' + rid).remove()
+      ];
       mIds.forEach(sid => {
-        up['classMembers/' + cur + '/' + sid + '/joined/' + rid] = null;
-        up['classMembers/' + cur + '/' + sid + '/late/' + rid] = null;
+        jobs.push(db.ref('classMembers/' + cur + '/' + sid + '/joined/' + rid).remove());
+        jobs.push(db.ref('classMembers/' + cur + '/' + sid + '/late/' + rid).remove());
       });
       // Тухайн ангийн сурагчдын илгээсэн дүнг өрөөнөөс хасна (бусад ангийн дүн хэвээр үлдэнэ)
       try {
@@ -9740,10 +9767,10 @@ function ClassesPage({ exams, onBack }) {
           if (!sm) return;
           const byUid = sm.uid && mIds.includes(sm.uid);
           const byName = !!clsName && String(sm.studentClass || '').trim().toLowerCase() === clsName && names.includes(String(sm.studentName || '').trim().toLowerCase());
-          if (byUid || byName) up['activeRooms/' + rid + '/submissions/' + subId] = null;
+          if (byUid || byName) jobs.push(db.ref('activeRooms/' + rid + '/submissions/' + subId).remove());
         });
       } catch (_) {}
-      await db.ref().update(up);
+      await Promise.allSettled(jobs);
       setDelAsk(null);
       setSel({});
       alert('Ангиас бүрмөсөн устлаа: оноолт, дүн, скан, нэвтрэлтийн бүртгэл хамт.');
@@ -9949,9 +9976,10 @@ function ClassesPage({ exams, onBack }) {
       await aRef.set({ title: ex.title, kind: assignKind, at: new Date().toISOString(), state: 'open', mode: 'manual', openedAt: new Date().toISOString(), entryMinutes: 0, round });
       // Шинээр оноож байгаа бол энэ ангийн хуучин илгээлт/дүнг цэвэрлэнэ («устсан бол устсан»)
       if (!prev) {
-        const up = {};
-        up['classResults/' + cur + '/' + ex.id] = null;
-        up['zgScans/' + cur + '/' + ex.id] = null;
+        const jobs = [
+          db.ref('classResults/' + cur + '/' + ex.id).remove(),
+          db.ref('zgScans/' + cur + '/' + ex.id).remove()
+        ];
         try {
           const subs = (await db.ref('activeRooms/' + ex.id + '/submissions').once('value')).val() || {};
           const clsName = String((c || {}).name || '').trim().toLowerCase();
@@ -9960,10 +9988,10 @@ function ClassesPage({ exams, onBack }) {
             if (!sm) return;
             const byUid = sm.uid && mIds.includes(sm.uid);
             const byName = !!clsName && String(sm.studentClass || '').trim().toLowerCase() === clsName && names.includes(String(sm.studentName || '').trim().toLowerCase());
-            if (byUid || byName) up['activeRooms/' + ex.id + '/submissions/' + subId] = null;
+            if (byUid || byName) jobs.push(db.ref('activeRooms/' + ex.id + '/submissions/' + subId).remove());
           });
         } catch (_) {}
-        try { await db.ref().update(up); } catch (_) {}
+        await Promise.allSettled(jobs);
       }
       setAssignOpen(false); setPick({ exam: '' });
     } catch (e) { alert('Оноож чадсангүй: ' + (e?.message || e)); }
