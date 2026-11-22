@@ -9582,6 +9582,7 @@ function ClassesPage({ exams, onBack }) {
   const [edAll, setEdAll] = useState({});     // label -> questions[]
   const [edMeta, setEdMeta] = useState({ title: '', duration: 0, maxAttempts: 0, scoreMode: 'best', passingScore: 60 });
   const [edBusy, setEdBusy] = useState(false);
+  const [edStep, setEdStep] = useState(1); // 1 = Үндсэн мэдээлэл, 2 = Асуулт үүсгэх
   const [swapFor, setSwapFor] = useState(null); // { rid, from } — материал солих
   useEffect(() => {
     if (!resFor) return;
@@ -9896,6 +9897,7 @@ function ClassesPage({ exams, onBack }) {
       if (!labels.length) { alert('Энэ тестийн материал олдсонгүй.'); return; }
       setEdAll(all); setEdLabel(labels[0]);
       setEdMeta({ title: src.title || '', duration: Number(src.duration) || 0, maxAttempts: Number(src.maxAttempts) || 0, scoreMode: src.scoreMode || 'best', passingScore: src.passingScore != null ? src.passingScore : 60, antiCheat: src.antiCheat !== false, noTimeLimit: src.noTimeLimit === true || !(Number(src.duration) > 0) });
+      setEdStep(1);
       setEdOpen({ rid });
     } catch (e) { alert('Материал уншиж чадсангүй: ' + (e?.message || e)); }
   };
@@ -10536,47 +10538,72 @@ function ClassesPage({ exams, onBack }) {
               <div style={{ fontFamily: 'Outfit', fontWeight: 800 }}>✏️ Материал засах · {c?.name}</div>
               <div style={{ fontSize: '.78rem', color: 'var(--text2)' }}>Өөрчлөлт зөвхөн энэ ангид үйлчилнэ. Анхны тест өөрчлөгдөхгүй.</div>
             </div>
-            <div className="modal-body" style={{ maxHeight: '64vh', overflowY: 'auto' }}>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
-                <div style={{ flex: '1 1 200px' }}>
-                  <label className="form-label">Нэр</label>
-                  <input className="form-input" value={edMeta.title} onChange={e => setEdMeta(m => ({ ...m, title: e.target.value }))} />
-                </div>
-                <div style={{ width: 120 }}>
-                  <label className="form-label">Хугацаа (мин)</label>
-                  <input className="form-input" type="number" min="0" max="600" disabled={!!edMeta.noTimeLimit}
-                    value={edMeta.noTimeLimit ? '' : edMeta.duration}
-                    onChange={e => setEdMeta(m => ({ ...m, duration: e.target.value, noTimeLimit: false }))} />
-                  <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: '.78rem', marginTop: 4 }}>
-                    <input type="checkbox" checked={!!edMeta.noTimeLimit}
-                      onChange={e => setEdMeta(m => ({ ...m, noTimeLimit: e.target.checked, duration: e.target.checked ? 0 : (m.duration || 45) }))} />
-                    Цаггүй
-                  </label>
-                </div>
-                <div style={{ width: 120 }}>
-                  <label className="form-label">Тэнцэх босго (%)</label>
-                  <input className="form-input" type="number" min="0" max="100" value={edMeta.passingScore} onChange={e => setEdMeta(m => ({ ...m, passingScore: e.target.value }))} />
-                </div>
-                <div style={{ width: 100 }}>
-                  <label className="form-label">Оролдлого</label>
-                  <input className="form-input" type="number" min="0" max="20" value={edMeta.maxAttempts} onChange={e => setEdMeta(m => ({ ...m, maxAttempts: e.target.value }))} />
-                </div>
-                <div style={{ width: 130 }}>
-                  <label className="form-label">Дүн тооцох</label>
-                  <select className="form-select" value={edMeta.scoreMode} onChange={e => setEdMeta(m => ({ ...m, scoreMode: e.target.value }))}>
-                    <option value="best">Хамгийн өндөр</option>
-                    <option value="avg">Дундаж</option>
-                    <option value="last">Сүүлийн</option>
-                  </select>
-                </div>
-                <div style={{ flex: '1 1 100%' }}>
-                  <label className="form-label" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '12px 20px 0', fontSize: '.82rem', fontWeight: 700, flexWrap: 'wrap' }}>
+              <span style={{ width: 22, height: 22, borderRadius: 20, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: edStep === 1 ? '#2563eb' : 'var(--surface2)', color: edStep === 1 ? '#fff' : 'var(--text3)' }}>1</span>
+              <span style={{ color: edStep === 1 ? 'var(--text)' : 'var(--text3)' }}>Үндсэн мэдээлэл</span>
+              <span style={{ flex: '0 0 26px', height: 1, background: 'var(--border)' }} />
+              <span style={{ width: 22, height: 22, borderRadius: 20, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: edStep === 2 ? '#2563eb' : 'var(--surface2)', color: edStep === 2 ? '#fff' : 'var(--text3)' }}>2</span>
+              <span style={{ color: edStep === 2 ? 'var(--text)' : 'var(--text3)' }}>Асуулт үүсгэх</span>
+            </div>
+            {edStep === 1 ? (
+              <>
+                <div className="modal-body">
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginBottom: 14 }}>
+                    <div>
+                      <label className="form-label" style={{ textTransform: 'uppercase' }}>Шалгалтын нэр</label>
+                      <input className="form-input" value={edMeta.title} onChange={e => setEdMeta(m => ({ ...m, title: e.target.value }))} placeholder="Шалгалтын нэр" />
+                    </div>
+                    <div>
+                      <label className="form-label" style={{ textTransform: 'uppercase' }}>Хугацаа (мин)</label>
+                      <input className="form-input" type="number" min="0" max="600" disabled={!!edMeta.noTimeLimit}
+                        value={edMeta.noTimeLimit ? '' : edMeta.duration}
+                        onChange={e => setEdMeta(m => ({ ...m, duration: e.target.value, noTimeLimit: false }))} />
+                      <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: '.82rem', marginTop: 6 }}>
+                        <input type="checkbox" checked={!!edMeta.noTimeLimit}
+                          onChange={e => setEdMeta(m => ({ ...m, noTimeLimit: e.target.checked, duration: e.target.checked ? 0 : (m.duration || 45) }))} />
+                        Цаггүй
+                      </label>
+                    </div>
+                  </div>
+                  <label className="form-label" style={{ display: 'flex', gap: 10, alignItems: 'center', textTransform: 'uppercase', marginBottom: 14 }}>
                     <input type="checkbox" checked={edMeta.antiCheat !== false}
                       onChange={e => setEdMeta(m => ({ ...m, antiCheat: e.target.checked }))} />
                     Cheat хамгаалалт (таб солих, фокус алдах)
                   </label>
+                  <div style={{ marginBottom: 14 }}>
+                    <label className="form-label" style={{ textTransform: 'uppercase' }}>Тэнцэх босго (%)</label>
+                    <input className="form-input" type="number" min="0" max="100" style={{ maxWidth: 160 }}
+                      value={edMeta.passingScore} onChange={e => setEdMeta(m => ({ ...m, passingScore: e.target.value }))} />
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                    <div>
+                      <label className="form-label" style={{ textTransform: 'uppercase' }}>Өгөх оролдлогын тоо</label>
+                      <select className="form-select" value={String(Number(edMeta.maxAttempts) || 0)}
+                        onChange={e => setEdMeta(m => ({ ...m, maxAttempts: +e.target.value }))}>
+                        <option value="0">Хязгааргүй</option>
+                        {[1, 2, 3, 4, 5, 10, 20].map(n => <option key={n} value={n}>{n} удаа</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="form-label" style={{ textTransform: 'uppercase' }}>Дүн хэрхэн тооцох</label>
+                      <select className="form-select" value={edMeta.scoreMode || 'best'}
+                        onChange={e => setEdMeta(m => ({ ...m, scoreMode: e.target.value }))}>
+                        <option value="best">Хамгийн өндөр дүнгээр</option>
+                        <option value="avg">Дундаж дүнгээр</option>
+                        <option value="last">Сүүлийн дүнгээр</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="form-hint" style={{ marginTop: 12 }}>Өөрчлөлт зөвхөн «{c?.name}» ангид үйлчилнэ. Анхны тест өөрчлөгдөхгүй.</div>
                 </div>
-              </div>
+                <div className="modal-foot" style={{ gap: 8 }}>
+                  <button className="btn btn-outline" onClick={() => setEdOpen(null)}>Болих</button>
+                  <button className="btn btn-primary" onClick={() => setEdStep(2)}>Дараах →</button>
+                </div>
+              </>
+            ) : (
+              <>
+            <div className="modal-body" style={{ maxHeight: '64vh', overflowY: 'auto' }}>
               {Object.keys(edAll).length > 1 && (
                 <div className="seg" style={{ marginBottom: 10, flexWrap: 'wrap' }}>
                   {Object.keys(edAll).sort().map(lb => (
@@ -10614,9 +10641,11 @@ function ClassesPage({ exams, onBack }) {
               <button className="btn btn-outline btn-sm" onClick={addQ}>＋ Асуулт нэмэх</button>
             </div>
             <div className="modal-foot" style={{ gap: 8, flexWrap: 'wrap' }}>
-              <button className="btn btn-outline" onClick={() => setEdOpen(null)}>Болих</button>
+              <button className="btn btn-outline" onClick={() => setEdStep(1)}>← Буцах</button>
               <button className="btn btn-primary" disabled={edBusy} onClick={saveClassExam}>{edBusy ? '⏳ Хадгалж байна...' : '💾 Хадгалах'}</button>
             </div>
+              </>
+            )}
           </div>
         </div>
       )}
