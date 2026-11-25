@@ -6981,6 +6981,8 @@ const groupByStudent = (subs, mode) => {
 function StudentDetailModal({ g, rank, exam, onClose, onCheat }) {
   const mode = exam.scoreMode || 'best';
   const passed = g.score >= exam.passingScore;
+  const cheatEvents = g.attempts.reduce((t, a) => t + (a.cheatLog || []).length, 0);
+  const cheatAttempts = g.attempts.filter(a => (a.cheatLog || []).length > 0).length;
   const rows = [
     ['Дугаар', '#' + rank],
     ['Нэр', g.name],
@@ -6988,6 +6990,10 @@ function StudentDetailModal({ g, rank, exam, onClose, onCheat }) {
     ['Эцсийн дүн', <span style={{fontFamily:'Outfit',fontWeight:800,color: passed ? 'var(--green)' : 'var(--red)'}}>{g.score}%</span>],
     ['Тооцох горим', SCORE_MODE_LABEL[mode]],
     ['Үр дүн', <span style={{fontWeight:700,color: passed ? 'var(--green)' : 'var(--red)'}}>{passed ? 'Тэнцсэн' : 'Тэнцээгүй'}</span>],
+    ['Cheat оролдлого', cheatEvents === 0
+      ? <span style={{color:'var(--green)',fontWeight:700}}>✓ Илрээгүй</span>
+      : <span style={{color:'var(--red)',fontWeight:800}}>⚠ {cheatEvents} удаа</span>],
+    ['Cheat-тай оролдлого', cheatAttempts === 0 ? '—' : `${cheatAttempts} / ${g.attempts.length}`],
     ['Нийт оролдлого', `${g.attempts.length} (бүтэн ${g.fullCount})` + (exam.maxAttempts ? ` · дээд ${exam.maxAttempts}` : '')],
   ];
   return (
@@ -7016,7 +7022,7 @@ function StudentDetailModal({ g, rank, exam, onClose, onCheat }) {
                       <td>{isRetrySub(a) ? 'Алдсан асуулт' : 'Бүгд'}{a.variantLabel ? ' · ' + a.variantLabel : ''}</td>
                       <td><b style={{color: ok ? 'var(--green)' : 'var(--red)'}}>{a.score}%</b> <span style={{color:'var(--text3)'}}>({a.correctCount}/{a.totalCount})</span></td>
                       <td>{typeof a.timeSpentSec === 'number' ? fmtDur(a.timeSpentSec) : '—'}</td>
-                      <td>{cc === 0 ? '✓' : <span className="cheat-pill cheat-pill-warn" onClick={() => onCheat(a)}>⚠ {cc}</span>}</td>
+                      <td>{cc === 0 ? '✓' : <span className="cheat-pill cheat-pill-warn" title={`${cc} удаа cheat оролдсон`} onClick={() => onCheat(a)}>⚠ {cc} удаа</span>}</td>
                     </tr>
                   );
                 })}
@@ -7054,7 +7060,7 @@ function CheatDetailModal({ sub, onClose }) {
         <div className="modal-head">
           <div>
             <div style={{fontFamily:'Outfit',fontWeight:800,fontSize:'1.1rem'}}>🔍 Cheat тайлан — {sub.studentName}</div>
-            <div style={{fontSize:'0.8rem',color:'var(--text2)'}}>{sub.studentClass} · {log.length} удаа сэжигтэй үйлдэл</div>
+            <div style={{fontSize:'0.8rem',color:'var(--text2)'}}>{sub.studentClass} · нийт <b style={{color:'var(--red)'}}>{log.length} удаа</b> cheat оролдлого</div>
           </div>
         </div>
         <div className="modal-body" style={{padding:'16px 24px'}}>
@@ -7065,6 +7071,20 @@ function CheatDetailModal({ sub, onClose }) {
             </div>
           ) : (
             <>
+              <div style={{display:'flex',gap:8,marginBottom:12,flexWrap:'wrap'}}>
+                <div style={{flex:'1 1 110px',background:'var(--red-light)',borderRadius:10,padding:'10px 12px',textAlign:'center'}}>
+                  <div style={{fontFamily:'Outfit',fontWeight:900,fontSize:'1.45rem',color:'var(--red)',lineHeight:1.1}}>{log.length}</div>
+                  <div style={{fontSize:'.72rem',color:'var(--text2)',fontWeight:700,textTransform:'uppercase'}}>Нийт удаа</div>
+                </div>
+                <div style={{flex:'1 1 110px',background:'var(--surface2)',borderRadius:10,padding:'10px 12px',textAlign:'center'}}>
+                  <div style={{fontFamily:'Outfit',fontWeight:900,fontSize:'1.45rem',color:'var(--text)',lineHeight:1.1}}>{Object.keys(counts).length}</div>
+                  <div style={{fontSize:'.72rem',color:'var(--text2)',fontWeight:700,textTransform:'uppercase'}}>Төрөл</div>
+                </div>
+                <div style={{flex:'2 1 190px',background:'var(--surface2)',borderRadius:10,padding:'10px 12px',fontSize:'.78rem',color:'var(--text2)',lineHeight:1.6}}>
+                  <div>Эхний: <b style={{color:'var(--text)'}}>{new Date(log[0].time).toLocaleTimeString('mn-MN')}</b></div>
+                  <div>Сүүлийн: <b style={{color:'var(--text)'}}>{new Date(log[log.length - 1].time).toLocaleTimeString('mn-MN')}</b></div>
+                </div>
+              </div>
               <div style={{display:'flex',flexWrap:'wrap',gap:8,marginBottom:16}}>
                 {Object.entries(counts).map(([type, cnt]) => {
                   const t = typeLabels[type] || {label:type,icon:'⚠'};
@@ -7080,6 +7100,7 @@ function CheatDetailModal({ sub, onClose }) {
                   const t = typeLabels[e.type] || {label:e.type,icon:'⚠'};
                   return (
                     <div className="cheat-event" key={i}>
+                      <span style={{fontSize:'.72rem',fontWeight:800,color:'var(--text3)',minWidth:22,textAlign:'right'}}>{i + 1}.</span>
                       <span style={{fontSize:'1rem'}}>{t.icon}</span>
                       <div style={{flex:1}}>
                         <div style={{fontWeight:600,color:'var(--text)'}}>{t.label}</div>
@@ -7194,6 +7215,8 @@ function ExamResultsView({ exam, allSubs: allSubsAll, source, initialKind, onBac
     ? [...classOptions, ''].map(cls => ({ cls, gs: groups.filter(g => (g.cls || '').trim() === cls) })).filter(x => x.gs.length)
     : [{ cls: null, gs: groups }];
   const secStat = (gs) => ({ avg: gs.length ? Math.round(gs.reduce((t, g) => t + g.score, 0) / gs.length) : 0, ok: gs.filter(g => g.score >= passOf(g.ref)).length });
+  const cheatTotal = displaySubs.reduce((t, s) => t + (s.cheatLog || []).length, 0);
+  const cheatStudents = groups.filter(g => g.attempts.some(a => (a.cheatLog || []).length > 0)).length;
 
   return (
     <div>
@@ -7282,6 +7305,7 @@ function ExamResultsView({ exam, allSubs: allSubsAll, source, initialKind, onBac
           <div className="stat-card"><div className="stat-val" style={{color:'var(--green)'}}>{passed}</div><div className="stat-lbl">Тэнцсэн</div></div>
           <div className="stat-card"><div className="stat-val" style={{color:'var(--red)'}}>{displaySubs.length - passed}</div><div className="stat-lbl">Тэнцээгүй</div></div>
           <div className="stat-card"><div className="stat-val">{avg}%</div><div className="stat-lbl">Дундаж оноо</div></div>
+          <div className="stat-card"><div className="stat-val" style={{color: cheatTotal ? 'var(--red)' : 'var(--green)'}}>{cheatTotal}</div><div className="stat-lbl">Cheat оролдлого (удаа){cheatStudents ? ` · ${cheatStudents} сурагч` : ''}</div></div>
         </div>
 
         {variantLabels.length > 1 && (
@@ -7361,7 +7385,7 @@ function ExamResultsView({ exam, allSubs: allSubsAll, source, initialKind, onBac
                         </td>
                         <td className="col-hide-m" style={{fontFamily:'monospace',fontSize:'0.9rem',color:'var(--text2)'}}>{took}</td>
                         <td className="col-hide-m">
-                          <span className={`cheat-pill ${pillCls}`} onClick={(e) => { e.stopPropagation(); onCheatClick(g.attempts.find(a => (a.cheatLog||[]).length) || s); }}>
+                          <span className={`cheat-pill ${pillCls}`} title={`Нийт ${cheatCnt} удаа cheat оролдсон`} onClick={(e) => { e.stopPropagation(); onCheatClick(g.attempts.find(a => (a.cheatLog||[]).length) || s); }}>
                             {cheatCnt === 0 ? '✓ Цэвэр' : `⚠ ${cheatCnt} удаа`}
                           </span>
                         </td>
@@ -10600,7 +10624,7 @@ function ClassesPage({ exams, onBack }) {
                         <td style={{ fontSize: '.78rem', color: 'var(--text2)' }}>{r.id}</td>
                         <td><b>{r.x.val}%</b></td>
                         <td>{r.x.n}×</td>
-                        <td>{clog.length === 0 ? '✓' : <button className="btn btn-outline btn-sm" style={{ color: '#b91c1c', borderColor: '#fca5a5' }} onClick={() => setCheatSub({ studentName: r.name, studentClass: c?.name || '', cheatLog: clog })}>⚠ {clog.length}</button>}</td>
+                        <td>{clog.length === 0 ? '✓' : <button className="btn btn-outline btn-sm" style={{ color: '#b91c1c', borderColor: '#fca5a5' }} onClick={() => setCheatSub({ studentName: r.name, studentClass: c?.name || '', cheatLog: clog })}>⚠ {clog.length} удаа</button>}</td>
                         <td><button className="btn btn-outline btn-sm" onClick={() => { setResFor(null); setDetail(r.sid); }}>Дэлгэрэнгүй</button></td>
                       </tr>
                       );
@@ -10774,9 +10798,11 @@ function ClassesPage({ exams, onBack }) {
                   <div key={rid} style={{ marginBottom: 14 }}>
                     <div style={{ fontWeight: 700 }}>{t.title} <span style={{ fontWeight: 400, color: 'var(--text2)', fontSize: '0.8rem' }}>· {SCORE_MODE_LABEL[modeOf(rid)]}</span></div>
                     {!x ? <div style={{ color: 'var(--text3)', fontSize: '0.85rem' }}>Өгөөгүй</div> : (<>
-                      <div style={{ margin: '4px 0' }}>Эцсийн дүн: <b>{x.val}%</b> · {x.n} оролдлого</div>
+                      {(() => { const tc = x.all.reduce((t, a) => t + (a.cheatLog || []).length, 0); return (
+                      <div style={{ margin: '4px 0' }}>Эцсийн дүн: <b>{x.val}%</b> · {x.n} оролдлого · Cheat: {tc === 0 ? <b style={{ color: 'var(--green)' }}>✓ 0 удаа</b> : <b style={{ color: 'var(--red)' }}>⚠ {tc} удаа</b>}</div>
+                      ); })()}
                       <div style={{ overflowX: 'auto' }}><table className="tbl"><thead><tr><th>#</th><th>Огноо</th><th>Төрөл</th><th>Дүн</th><th>Хугацаа</th><th>Cheat</th></tr></thead><tbody>
-                        {x.all.map((a, i) => { const cc = (a.cheatLog || []).length; return <tr key={a.id}><td>{i + 1}</td><td>{fmtDate(a.at)}</td><td>{a.source === 'zipgrade' ? 'ZipGrade' : a.extra ? 'Нэмэлт (дүнд тооцохгүй)' : a.mode === 'mistakes' ? 'Алдсан асуулт' : 'Бүгд'}</td><td><b>{a.score}%</b></td><td>{fmtDur(a.sec || 0)}</td><td>{cc === 0 ? '✓' : <button className="btn btn-outline btn-sm" style={{ color: '#b91c1c', borderColor: '#fca5a5' }} onClick={() => setCheatSub({ studentName: (members[detail] || {}).name || '', studentClass: c?.name || '', cheatLog: a.cheatLog || [] })}>⚠ {cc}</button>}</td></tr>; })}
+                        {x.all.map((a, i) => { const cc = (a.cheatLog || []).length; return <tr key={a.id}><td>{i + 1}</td><td>{fmtDate(a.at)}</td><td>{a.source === 'zipgrade' ? 'ZipGrade' : a.extra ? 'Нэмэлт (дүнд тооцохгүй)' : a.mode === 'mistakes' ? 'Алдсан асуулт' : 'Бүгд'}</td><td><b>{a.score}%</b></td><td>{fmtDur(a.sec || 0)}</td><td>{cc === 0 ? '✓' : <button className="btn btn-outline btn-sm" style={{ color: '#b91c1c', borderColor: '#fca5a5' }} onClick={() => setCheatSub({ studentName: (members[detail] || {}).name || '', studentClass: c?.name || '', cheatLog: a.cheatLog || [] })}>⚠ {cc} удаа</button>}</td></tr>; })}
                       </tbody></table></div></>)}
                     {(zgImgs[rid] || []).length > 0 && (
                       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
