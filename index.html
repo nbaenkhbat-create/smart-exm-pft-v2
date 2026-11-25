@@ -4483,7 +4483,7 @@ const SCAN_PROMPT = [
   '6. IGNORE: the bubble answer sheet, Name/Date box, ZipGrade logos, black corner squares, section headings, page numbers, and ALL handwriting (circles, ticks, underlines, connecting lines, pen scores). Handwriting is never an answer.',
   '7. SPELLING (most important): copy every word letter by letter exactly as printed. Mongolian uses Ө ө Ү ү Ё Ш Щ Ъ Ь Ы Э Ю Я: do not confuse Ө/О, Ү/У, Н/И, Ш/Щ, Э/Е, Л/Д, З/3. Use context only to choose between look-alike letters. Never autocorrect, rephrase, translate, modernise or complete a cut-off word; if unclear copy the visible letters.',
   '8. NUMBERS and FORMULAS exactly: examine every small digit, subscript, power, minus sign, decimal and unit. Use this notation (never backslashes, the output is JSON): subscript q_1 (q_{12} if more than one character), power r^2 or 10^{-3}, a STACKED fraction (numerator printed above a fraction bar) as FRAC{numerator}{denominator}, square root SQRT{...}. Example: F=k FRAC{q_1*q_2}{r^2}. A slash printed on one line (m/s, 5/2 inline) stays as "/" and is NOT turned into FRAC. Chemical formulas as plain text (H2SO4). Keep the printed decimal separator.',
-  '9. "figures": every drawing, graph, circuit, geometric figure or table-picture. "image" = 1-based photo index; "box" = [x0,y0,x1,y1] TIGHT box of the drawing only on a 0..1000 scale (top-left origin), excluding question text, numbers and option lists but including labels drawn inside it; "questions" = printed numbers that use it (one shared figure = one entry). Several small graphs in one row = ONE box. Never copy a table cell values into text. Make the box slightly generous if the page is tilted. No drawing: [].',
+  '9. "figures": every drawing, graph, circuit, geometric figure or table-picture. "image" = 1-based photo index; "box" = [x0,y0,x1,y1] TIGHT box of the drawing only on a 0..1000 scale (top-left origin), excluding question text, numbers and option lists but including labels drawn inside it; "questions" = printed numbers that use it (one shared figure = one entry). Several small graphs in one row = ONE box. Never copy a table cell values into text. Make the box slightly generous if the page is tilted. NEVER omit a picture: if any drawing, graph, chart, diagram or photo is printed on the page, return at least one figure entry for it. No drawing at all: [].',
   'JSON only.'
 ].join('\n');
 
@@ -4749,20 +4749,15 @@ const scanCropGroup = (info, G) => {
     const x0 = Math.max(0, Math.round(G.x0 / k - ml)), y0 = Math.max(0, Math.round(G.y0 / k - mt));
     const x1 = Math.min(img.width, Math.round(G.x1 / k + mr)), y1 = Math.min(img.height, Math.round(G.y1 / k + mb));
     const cw = x1 - x0, ch = y1 - y0; if (cw < 20 || ch < 20) return '';
+    // Пикселийг өөрчлөхгүй: багшийн оруулсан файл дээрх зураг ЯГ тэр хэвээрээ таслагдана.
     let kk = Math.min(1, 1100 / cw), out = '';
     for (let t = 0; t < 5; t++) {
       const o = document.createElement('canvas'); o.width = Math.max(1, Math.round(cw * kk)); o.height = Math.max(1, Math.round(ch * kk));
-      const oc = o.getContext('2d', { willReadFrequently: true }); oc.fillStyle = '#fff'; oc.fillRect(0, 0, o.width, o.height);
+      const oc = o.getContext('2d'); oc.imageSmoothingQuality = 'high';
+      oc.fillStyle = '#fff'; oc.fillRect(0, 0, o.width, o.height);
       oc.drawImage(img, x0, y0, cw, ch, 0, 0, o.width, o.height);
-      const id = oc.getImageData(0, 0, o.width, o.height), d = id.data, hist = new Uint32Array(256);
-      for (let i = 0; i < d.length; i += 4) hist[(d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8]++;
-      let acc = 0, p = 255; const tot = o.width * o.height;
-      for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= tot * 0.85) { p = v; break; } }
-      const lo = p * 0.35, hi = p * 0.8;
-      if (hi - lo > 20) for (let i = 0; i < d.length; i += 4) for (let ch2 = 0; ch2 < 3; ch2++) d[i + ch2] = Math.max(0, Math.min(255, (d[i + ch2] - lo) * 255 / (hi - lo)));
-      oc.putImageData(id, 0, 0);
-      out = o.toDataURL('image/jpeg', 0.88); if (out.length <= 380000) break;
-      out = o.toDataURL('image/jpeg', 0.72); if (out.length <= 380000) break;
+      out = o.toDataURL('image/jpeg', 0.92); if (out.length <= 380000) break;
+      out = o.toDataURL('image/jpeg', 0.8); if (out.length <= 380000) break;
       kk *= 0.8;
     }
     return out.length <= 390000 ? out : '';
@@ -4792,21 +4787,46 @@ const scanRefineCrop = async (cropUrl) => {
   } catch (e) { console.warn('scan refine skipped', e && e.message); return ''; }
 };
 
+// Хуудас дээр хэвлэгдсэн зургийг (график, схем) алгассан бол зөвхөн зурагт зориулж дахин асууна.
+const SCAN_FIG_LOST_PROMPT = 'This is one page of a printed school exam. Find EVERY printed picture on it: drawing, graph, chart, diagram, circuit, geometric figure or photo.\n' +
+  'Return ONLY this JSON: {"figures":[{"box":[x0,y0,x1,y1],"questions":[1,2]}]}\n' +
+  '- box = TIGHT box around ONE picture on a 0..1000 scale of THIS image (0,0 = top-left, 1000,1000 = bottom-right), including the labels printed inside the picture, excluding the question text and option lists.\n' +
+  '- questions = the printed question numbers that use that picture (empty array if no number is printed next to it).\n' +
+  '- Several small graphs printed side by side in one row = ONE entry covering the whole row.\n' +
+  '- No picture on the page: {"figures":[]}\n' +
+  'Ignore pure text, answer options and the bubble answer sheet. JSON only.';
+
+const scanDetectLostFigures = async (imgUrl) => {
+  try {
+    const content = [{ type: 'text', text: SCAN_FIG_LOST_PROMPT }, { type: 'image_url', image_url: { url: imgUrl } }];
+    const res = await scanCallGroq(SCAN_GROQ_MODEL, content, true, 0.1, false, 900);
+    const txt = res.choices && res.choices[0] && res.choices[0].message ? res.choices[0].message.content : '';
+    const j = scanExtractJson(typeof txt === 'string' ? txt : JSON.stringify(txt || ''));
+    const arr = j && Array.isArray(j.figures) ? j.figures : [];
+    return arr.filter((f) => f && Array.isArray(f.box) && f.box.length === 4 && f.box.map(Number).every((v) => isFinite(v))).slice(0, 12);
+  } catch (e) { console.warn('scan figure detect skipped', e && e.message); return []; }
+};
+
 // Хуудас бүрийн зургийг пикселээр олоод, моделийн жагсаалттай дарааллаар (тоо таарвал) эсвэл хамгийн ойрын байрлалаар холбоно.
 const scanAttachFigures = async (mapped, figures, images, onStatus) => {
   let attached = 0;
-  if (!Array.isArray(figures) || !figures.length || !images.length) return attached;
+  if (!images.length) return attached;
   const byImg = {};
-  figures.slice(0, 12).forEach((f) => {
+  (Array.isArray(figures) ? figures : []).slice(0, 12).forEach((f) => {
     if (!f) return;
     const idx = Math.max(1, Math.min(images.length, parseInt(f.image, 10) || 1)) - 1;
     (byImg[idx] = byImg[idx] || []).push(f);
   });
-  for (const key of Object.keys(byImg)) {
-    const idx = +key, figs = byImg[key];
+  for (let idx = 0; idx < images.length; idx++) {
     onStatus && onStatus('Зураг олж байна...');
     const info = await scanFigureGroups(images[idx]);
     const noGroups = !info.groups || !info.groups.length;
+    let figs = byImg[idx] || [];
+    if (!figs.length) {
+      if (noGroups) continue;                            // хуудас дээр зураг байхгүй: зөвхөн текст уншина
+      figs = await scanDetectLostFigures(images[idx]);   // эх дуудлагад зураг алгассан: зөвхөн зурагт зориулж дахин асууна
+      if (!figs.length) continue;
+    }
     let pairs;
     if (noGroups) pairs = figs.map((f) => [f, null]);
     else if (figs.length === info.groups.length) pairs = figs.map((f, i) => [f, info.groups[i]]);
@@ -5274,7 +5294,7 @@ function PhotoQuizStep({ onParsed, onManual, onBack, onTitle, variantCount, onVa
       <div className="ai-hint-box">
         <div className="ai-icon">📷</div>
         <div className="ai-hint-text">
-          <strong>Scan</strong> — Цаасан даалгаврын зураг, PDF эсвэл Word (.docx) файл оруулна. Бүгд ижил аргаар боловсрогдож, дараа нь засах форм нээгдэнэ.
+          <strong>Scan</strong> — Цаасан даалгаврын зураг, PDF эсвэл Word (.docx) файл оруулна. Оруулсан файл дээр <b>зураг/схем/график</b> байвал яг тэр зургыг нь таслаж асуултад хавсаргана, <b>текст</b> байвал текстийг нь уншиж, дүн шинжилгээ хийгээд тест болгоно. Дараа нь засах форм нээгдэнэ.
         </div>
       </div>
       {busy ? (
