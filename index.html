@@ -773,9 +773,22 @@ if (window.pdfjsLib) {
     return gr.length > 0 && String(expected).split('|').map(nr).filter(Boolean).indexOf(gr) >= 0;
   }
     if (type === 'blank') {
-      // Нөхөх: том/жижиг, зай, тэмдэгт ялгахгүй. Хэд хэдэн зөв хариултыг "|"-ээр тусгаарлана
+      // Нөхөх: том/жижиг, зай, тэмдэгт ялгахгүй. Хэд хэдэн зөв хариултыг "|"-ээр тусгаарлана.
+      // Хаалтанд байгаа нэмэлт үг ((the) cat) боломжтой гэж үзэж, хоёр хувилбараар шалгана.
+      const alts = [];
+      String(expected).split('|').forEach((x) => {
+        alts.push(x);
+        const noOpt = x.replace(/\([^)]*\)/g, ' ').replace(/\s+/g, ' ').trim();
+        if (noOpt && noOpt !== x) alts.push(noOpt);
+      });
       const gb = normBlank(got);
-      return gb.length > 0 && String(expected).split('|').map(normBlank).filter(Boolean).indexOf(gb) >= 0;
+      return gb.length > 0 && alts.map(normBlank).filter(Boolean).indexOf(gb) >= 0;
+    }
+    if (type === 'match') {
+      const cyr = 'АБВГДЕЖЗ';
+      const nm = (s) => String(s == null ? '' : s).toUpperCase().split('').map((ch) => (cyr.indexOf(ch) >= 0 ? 'ABCDEFGH'[cyr.indexOf(ch)] : ch)).join('').replace(/[^A-H]/g, '');
+      const gm = nm(got), em = nm(expected);
+      return gm.length > 0 && gm === em;
     }
     const g = String(got ?? '').trim().toUpperCase();
     const e = String(expected).trim().toUpperCase();
@@ -2595,7 +2608,13 @@ const defaultOptionsForType = (type) => {
 const MATCH_LABELS = ['А', 'Б', 'В', 'Г', 'Д', 'Е', 'Ж', 'З'];
 const matchLabel = (key) => MATCH_LABELS['ABCDEFGH'.indexOf(key)] || key;
 const matchToArr = (v, n) => {
-  const a = String(v == null ? '' : v).split(',').map(x => x.trim().toUpperCase());
+  const cyr = 'АБВГДЕЖЗ';
+  const src = Array.isArray(v) ? v.join(',') : String(v == null ? '' : v);
+  const a = src.toUpperCase().replace(/[^A-HА-З]+/g, ',').split(',').filter(Boolean).map((x) => {
+    if (x.length > 1) return x;
+    const i = cyr.indexOf(x);
+    return i >= 0 ? 'ABCDEFGH'[i] : x;
+  });
   while (a.length < n) a.push('');
   return a.slice(0, n);
 };
@@ -2636,8 +2655,20 @@ const answersEqual = (got, expected, type) => {
     return gr.length > 0 && String(expected).split('|').map(nr).filter(Boolean).indexOf(gr) >= 0;
   }
   if (type === 'blank') {
+    const alts = [];
+    String(expected).split('|').forEach((x) => {
+      alts.push(x);
+      const noOpt = x.replace(/\([^)]*\)/g, ' ').replace(/\s+/g, ' ').trim();
+      if (noOpt && noOpt !== x) alts.push(noOpt);
+    });
     const gb = normBlank(got);
-    return gb.length > 0 && String(expected).split('|').map(normBlank).filter(Boolean).indexOf(gb) >= 0;
+    return gb.length > 0 && alts.map(normBlank).filter(Boolean).indexOf(gb) >= 0;
+  }
+  if (type === 'match') {
+    const cyr = 'АБВГДЕЖЗ';
+    const nm = (s) => String(s == null ? '' : s).toUpperCase().split('').map((ch) => (cyr.indexOf(ch) >= 0 ? 'ABCDEFGH'[cyr.indexOf(ch)] : ch)).join('').replace(/[^A-H]/g, '');
+    const gm = nm(got), em = nm(expected);
+    return gm.length > 0 && gm === em;
   }
   const g = String(got ?? '').trim().toUpperCase();
   const e = String(expected).trim().toUpperCase();
@@ -3881,7 +3912,7 @@ const finalizeImportedQuestions = (list) => {
     if (type === 'open') {
       answer = null;   // задгай даалгаврыг автоматаар шалгахгүй (багш гараар дүгнэнэ)
     } else if (answer != null && (type === 'blank' || type === 'rewrite')) {
-      answer = String(answer).trim().slice(0, 200) || null;
+      answer = type === 'blank' && Array.isArray(answer) ? scanBlankAnswer(answer) : (String(answer).trim().slice(0, 200) || null);
     } else if (answer != null && type === 'tf') {
       answer = tfToken(answer);
     } else if (answer != null && type !== 'grid') {
@@ -4317,6 +4348,15 @@ const scanExtractJson = (text) => {
 // Моделийн байнга андуурдаг үгс. Шаардлагатай бол энд мөр нэмнэ.
 const SCAN_FIXES = [[/төлөөс/g, 'төлвөөс'], [/Төлөөс/g, 'Төлвөөс'], [/хамарлы/g, 'хамаарлы'], [/диаграмаар/g, 'диаграммаар'], [/хайлгах/g, 'хайлах'], [/конденсцах/g, 'конденсацлах']];
 const scanFixTerms = (t) => SCAN_FIXES.reduce((a, r) => a.replace(r[0], r[1]), String(t == null ? '' : t));
+// AI-аас ирсэн нөхөх хариултыг цэвэрлэнэ: массив болон ";"-ээр тусгаарласан хувилбаруудыг "|" болгоно
+const scanBlankAnswer = (v) => {
+  if (v == null) return null;
+  const one = (x) => String(x == null ? '' : (typeof x === 'object' ? (x.text || x.answer || x.value || '') : x))
+    .replace(/^[«"“'`]+|[»"”'`]+$/g, '').replace(/^[.．]+|[.．]+$/g, '').trim();
+  const list = (Array.isArray(v) ? v : [v]).flatMap((x) => (typeof x === 'string' ? x.split(/\s*(?:\||;)\s*/) : [x])).map(one).filter(Boolean);
+  const uniq = [...new Set(list)];
+  return uniq.length ? uniq.join('|').slice(0, 200) : null;
+};
 const scanMapQuiz = (raw, passageOverride) => {
   if (window.SEOMR && typeof window.SEOMR.groqVisionQuiz === 'function' && raw && raw.__mapped) return raw;
   const title = String((raw && raw.title) || '').trim().slice(0, 200);
@@ -4327,13 +4367,13 @@ const scanMapQuiz = (raw, passageOverride) => {
     let type = String(q.type || 'mcq').toLowerCase();
     if (['multiple', 'choice', 'single'].includes(type)) type = 'mcq';
     if (['fill', 'fill_in', 'blank'].includes(type)) type = 'blank';
-    if (['matching', 'match'].includes(type)) type = 'match';
+    if (['matching', 'match', 'pair', 'pairs', 'pairing'].includes(type)) type = 'match';
     if (['truefalse', 'tf', 'true_false'].includes(type)) type = 'tf';
     if (['rewrite', 'punctuation', 'combine', 'rewriting'].includes(type)) type = 'rewrite';
     if (['open', 'essay', 'written', 'free', 'long', 'short_answer', 'open_ended', 'constructed'].includes(type)) type = 'open';
     const text = scanFixTerms(String(q.text || q.question || q.instruction || '')).trim();
     const rawLeft = Array.isArray(q.left) ? q.left : [];
-    if (!text && !(type === 'match' && rawLeft.length >= 2)) return;
+    if (!text && !(type === 'match' && (rawLeft.length >= 2 || (Array.isArray(q.right) ? q.right : []).length >= 2 || Array.isArray(q.pairs)))) return;
     const item = {
       id: out.length + 1, text: (text || 'Холбох').slice(0, 2000), type, topic: (/^[IVX]+\./.test(String(q.topic || '').trim()) ? '\u00a7' : '') + String(q.topic || '').slice(0, 118),
       imageUrl: '', sourceText: String(q.sourceText || q.context || '').slice(0, 4000), audioUrl: '', unit: '',
@@ -4341,15 +4381,37 @@ const scanMapQuiz = (raw, passageOverride) => {
       _n: (q.n != null && isFinite(+q.n)) ? +q.n : null
     };
     if (type === 'match') {
-      item.left = rawLeft.slice(0, 8).map((t) => String((t && typeof t === 'object') ? (t.text || t.item || '') : t || '').slice(0, 300));
-      if (item.left.length < 2) item.left = ['', ''];
-      const rights = q.right || q.options || [];
-      item.options = rights.slice(0, 8).map((t, oi) => (t && typeof t === 'object')
-        ? { key: t.key || 'ABCDEFGH'[oi], text: String(t.text || '').slice(0, 500) }
-        : { key: 'ABCDEFGH'[oi], text: String(t || '').slice(0, 500) });
-      if (item.options.length < 2) item.options = [{ key: 'A', text: '' }, { key: 'B', text: '' }];
-      // "1-B,2-A,3-C" / "1-Б, 2-А" → "B,A,C"
-      item.answer = parseMatchAnswerToken(q.answer, item.left.length) || null;
+      const scanText = (v) => String(v == null ? '' : (typeof v === 'object' ? (v.text || v.item || v.value || v.label || v.definition || v.meaning || '') : v)).trim();
+      const stripNo = (s) => s.replace(/^\s*\d{1,2}\s*[.)．:\-–—]\s+/, '').trim();
+      const stripKey = (s) => s.replace(/^\s*[A-HА-Зa-hа-з]\s*[.)．:\-–—]\s+/, '').trim();
+      let lefts = rawLeft.map((t) => stripNo(scanText(t))).filter(Boolean);
+      const pairs = Array.isArray(q.pairs) ? q.pairs : null;
+      if (!lefts.length && pairs) lefts = pairs.map((p) => stripNo(scanText(p && (p.left != null ? p.left : (p.a != null ? p.a : p.item))))).filter(Boolean);
+      const rawRights = Array.isArray(q.right) ? q.right : (Array.isArray(q.options) ? q.options : (pairs ? pairs.map((p) => (p && (p.right != null ? p.right : (p.b != null ? p.b : p.answer)))) : []));
+      let rights = rawRights
+        .map((t) => {
+          const obj = (t && typeof t === 'object') ? t : null;
+          return { key: (obj && (obj.key || obj.letter || obj.label)) || null, text: stripKey(scanText(t)) };
+        }).filter((o) => o.text);
+      const seen = new Set();
+      rights = rights.slice(0, 10).map((o, oi) => ({ key: matchKey(o.key) || 'ABCDEFGH'[oi], text: o.text.slice(0, 500) }))
+        .filter((o) => (seen.has(o.key) ? false : (seen.add(o.key), true)));
+      if (lefts.length >= 2 && rights.length >= 2) {
+        item.type = 'match';
+        item.left = lefts.slice(0, 10);
+        item.options = rights;
+        // "1-B,2-A,3-C" / "1-Б; 2-А" / "B,A,C" → "B,A,C"
+        item.answer = parseMatchAnswerToken(Array.isArray(q.answer) ? q.answer.join(',') : q.answer, item.left.length) || null;
+      } else if (lefts.length >= 2) {
+        // Баруун тал нь дутуу ирсэн — зүүн талыг хадгалж, багш гараар нөхнө
+        item.type = 'match'; item.left = lefts.slice(0, 10);
+        item.options = [{ key: 'A', text: '' }, { key: 'B', text: '' }]; item.answer = null;
+      } else if (rights.length >= 2) {
+        // Зүүн талгүй бол холбох гэж албадахгүй — энгийн сонголт болгоно
+        item.type = 'mcq'; item.left = []; item.options = rights.slice(0, 5); item.answer = null;
+      } else {
+        item.type = 'blank'; item.left = []; item.options = []; item.answer = null;
+      }
     } else if (type === 'tf') {
       item.options = [{ key: 'A', text: 'Зөв / Үнэн' }, { key: 'B', text: 'Буруу / Худал' }];
       item.answer = tfToken(q.answer);
@@ -4361,7 +4423,7 @@ const scanMapQuiz = (raw, passageOverride) => {
     } else if (type === 'blank' || type === 'grid') {
       item.type = type === 'grid' ? 'grid' : 'blank';
       item.options = [];
-      item.answer = q.answer != null ? String(q.answer).slice(0, 80) : null;
+      item.answer = type === 'grid' ? (q.answer != null ? String(q.answer).slice(0, 80) : null) : scanBlankAnswer(q.answer);
       item.numericAnswer = type === 'grid' ? item.answer : null;
     } else {
       item.type = 'mcq';
@@ -4413,6 +4475,7 @@ const SCAN_PROMPT = [
   'RULES',
   '1. Keep the printed order. "n" = printed question number. "text" = ONLY that question own words (no number, no answer options, never words from a neighbouring question). Keep dotted blanks "......" where printed.',
   '2. "type": "mcq" = choose one; options = every printed option text in order (A,B,C,D, and E if printed) WITHOUT the letters. Return exactly as many options as are printed: 4 if only A-D exist, 5 if A-E exist; never invent an empty E. "blank" = gap to fill (gerund, chart cell, complete the sentence), options []. "tf" = true/false, options [], answer "A" true / "B" false only if printed. "match" = TWO COLUMNS that must be linked: left = numbered items WITHOUT numbers, right = lettered items WITHOUT letters, text = the instruction only (e.g. "Match the words to their definitions"). Never dump left+right into "text". Never treat "1. To devote   a. a book..." as mcq options. If a section is Match/definitions, ONE match question with ALL left items and ALL right items. "rewrite" = student rewrites a whole sentence (add punctuation and capitals, or combine two sentences with the given word such as so that / in order to): text = the ORIGINAL sentence(s) exactly as printed including the word in brackets, options [], answer = the correct full sentence. "open" = other written task (calculate, explain, translate), options [], answer "". Chart/table (Country / Nationality / Language): one blank per missing cell; text like "Row 2 Nationality" plus any given cell values in context.',
+  'MATCH/FILL OUTPUT: match → "left" = numbered items with the numbers removed, "right" = lettered items with the letters removed, both in printed order, answer = one letter per left item in left order, e.g. "B,A,C" (accepts "1-B,2-A"); never merge the two columns, never swap their order, never put the same text on both sides. blank → "answer" = ONLY the missing word(s), no dots, no brackets, no numbering; several accepted forms separated by ";".',
   '3. "answer": for physics/chemistry/math only when an answer key is printed, else empty, never solve. EXCEPTION for ENGLISH grammar exams: ALWAYS fill answer with the correct key (blank = the word, several accepted forms separated by |; mcq = letter; match = letters like B,A,C; rewrite = full sentence; chart cell = the word). Teacher will verify.',
   'ENGLISH EXAM STRUCTURE: Roman numeral sections (I, II, III...) each have an instruction and points. The output must look IDENTICAL to the printed exam. For EVERY question set "topic" = the section heading copied EXACTLY as printed, with Roman numeral, instruction and points, e.g. "II. Match the words to their definitions /4 points/" (max 110 chars), the same text for all items of that section. Keep the original wording of every sentence unchanged (no translating, no fixing, no shortening). Every gap, including an EMPTY SPACE gap or dotted gap, must be written as "....." at its exact position in text, and the verb in brackets stays where printed. Make ONE question per numbered item, except match = one question for the whole section. A sentence with an underlined or italic choice like will/shall or steal/stealing = mcq with those words as options A and B (answer is the letter) and in text write the choice at its exact position as {will/shall}, e.g. "{will/shall} you help me to open this door?". Unjumble/anagram (JATORNI) = blank, text = JATORNI (exactly as printed). TABLE or CHART section: for each missing cell make one blank with text = TABLE|rowNo|ColumnName|Header1;Header2;Header3|cell1;cell2;cell3 where the last part lists the printed row values in column order and an EMPTY string for every missing cell, e.g. TABLE|1|Nationality|Country;Nationality;Language|Germany;;  and answer = the missing word. Create nouns by endings = blank, text = Beauty. A sentence with a gap and a verb in brackets = blank, keep the dotted gap in text; if a sentence has two gaps make two questions, each text marks its own gap as ____ and shows the other gap solved. Decide gradual change vs present action = mcq with options Gradual change (GC), Present action (PA). Translate = open.',
   '4. "passage" = long source text printed before the questions ("" if none). "context" = shared data used by several questions (e.g. "63-65-р даалгаврын өгөгдөл: ..."), copied into EVERY question of the group without the heading.',
@@ -6973,9 +7036,15 @@ function CheatDetailModal({ sub, onClose }) {
     TAB_SWITCH: { label: 'Таб сэлгэсэн', icon: '🔀' },
     WINDOW_BLUR: { label: 'Цонхноос гарсан', icon: '👁' },
     COPY: { label: 'Текст хуулсан', icon: '📋' },
+    PASTE: { label: 'Текст буулгасан', icon: '📥' },
+    CUT: { label: 'Текст тасласан', icon: '✂' },
     RIGHT_CLICK: { label: 'Баруун товч', icon: '🖱' },
     TRANSLATE: { label: 'Translate ашигласан', icon: '🌐' },
     SPLIT_SCREEN: { label: 'Дэлгэц хуваасан', icon: '🪟' },
+    KEY_BLOCK: { label: 'Хориотой товчлол', icon: '⌨' },
+    PRINT_SCREEN: { label: 'Дэлгэцийн зураг авахыг оролдсон', icon: '📸' },
+    FULLSCREEN_EXIT: { label: 'Бүтэн дэлгэцээс гарсан', icon: '⛶' },
+    SIDE_PANEL: { label: 'Хажуугийн самбар нээсэн', icon: '🪟' },
     FORCE_STOP: { label: 'Багш зогсоосон', icon: '⏹' },
   };
   const counts = log.reduce((acc, e) => { acc[e.type] = (acc[e.type]||0)+1; return acc; }, {});
@@ -7014,6 +7083,7 @@ function CheatDetailModal({ sub, onClose }) {
                       <span style={{fontSize:'1rem'}}>{t.icon}</span>
                       <div style={{flex:1}}>
                         <div style={{fontWeight:600,color:'var(--text)'}}>{t.label}</div>
+                        {e.detail && <div style={{color:'var(--text2)',fontSize:'0.78rem'}}>{String(e.detail)}</div>}
                         <div style={{color:'var(--text3)',fontSize:'0.75rem'}}>{new Date(e.time).toLocaleTimeString('mn-MN')}</div>
                       </div>
                     </div>
@@ -9086,7 +9156,8 @@ const saveAttempt = async (sub, exam, meta) => {
   try {
     await db.ref('attempts/' + u.uid + '/' + exam.id + '/' + sub.id).set(rec);
     await db.ref('classResults/' + meta.classId + '/' + exam.id + '/' + u.uid + '/' + sub.id)
-      .set({ name: u.displayName || 'Сурагч', at: rec.at, score: rec.score, sec: rec.sec, mode: rec.mode, extra: !!rec.extra, round: rec.round || null });
+      .set({ name: u.displayName || 'Сурагч', at: rec.at, score: rec.score, sec: rec.sec, mode: rec.mode, extra: !!rec.extra, round: rec.round || null,
+        cheatLog: (sub.cheatLog || []).slice(-200), variant: rec.variant, title: rec.title });
   } catch (e) { console.warn('saveAttempt', e); }
 };
 const fmtDate = iso => { try { return new Date(iso).toLocaleString('mn-MN', { dateStyle: 'short', timeStyle: 'short' }); } catch { return iso || ''; } };
@@ -9650,6 +9721,7 @@ function ClassesPage({ exams, onBack }) {
       : m === 'last' ? base[base.length - 1].score : Math.max(...base.map(a => a.score));
     return { val, last: all[all.length - 1].score, n: all.length, all }; };
   const [detail, setDetail] = useState(null);
+  const [cheatSub, setCheatSub] = useState(null);
   useEffect(() => {
     if (!detail || !cur) { setZgImgs({}); return; }
     const db = getDb(); let off = false;
@@ -10518,17 +10590,21 @@ function ClassesPage({ exams, onBack }) {
                 {!did.length ? (
                   <div style={{ color: 'var(--text3)', fontSize: '.85rem' }}>Одоогоор хэн ч энэ {kindLbl}ыг өгөөгүй байна.</div>
                 ) : (
-                  <table className="tbl"><thead><tr><th>№</th><th>Сурагч</th><th>ID</th><th>Дүн</th><th>Оролдлого</th><th></th></tr></thead><tbody>
-                    {did.map((r, i) => (
+                  <table className="tbl"><thead><tr><th>№</th><th>Сурагч</th><th>ID</th><th>Дүн</th><th>Оролдлого</th><th>Cheat</th><th></th></tr></thead><tbody>
+                    {did.map((r, i) => {
+                      const clog = (r.x.all || []).flatMap(a => a.cheatLog || []);
+                      return (
                       <tr key={r.sid}>
                         <td>{i + 1}</td>
                         <td>{r.name}</td>
                         <td style={{ fontSize: '.78rem', color: 'var(--text2)' }}>{r.id}</td>
                         <td><b>{r.x.val}%</b></td>
                         <td>{r.x.n}×</td>
+                        <td>{clog.length === 0 ? '✓' : <button className="btn btn-outline btn-sm" style={{ color: '#b91c1c', borderColor: '#fca5a5' }} onClick={() => setCheatSub({ studentName: r.name, studentClass: c?.name || '', cheatLog: clog })}>⚠ {clog.length}</button>}</td>
                         <td><button className="btn btn-outline btn-sm" onClick={() => { setResFor(null); setDetail(r.sid); }}>Дэлгэрэнгүй</button></td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody></table>
                 )}
               </div>
@@ -10679,6 +10755,8 @@ function ClassesPage({ exams, onBack }) {
         </div>
       )}
 
+      {cheatSub && <CheatDetailModal sub={cheatSub} onClose={() => setCheatSub(null)} />}
+
       {zgBig && (
         <div className="modal-overlay" style={{ zIndex: 400 }} onClick={() => setZgBig('')}>
           <img src={zgBig} alt="" style={{ maxWidth: '100%', maxHeight: '92vh', borderRadius: 10, background: '#fff' }} />
@@ -10697,8 +10775,8 @@ function ClassesPage({ exams, onBack }) {
                     <div style={{ fontWeight: 700 }}>{t.title} <span style={{ fontWeight: 400, color: 'var(--text2)', fontSize: '0.8rem' }}>· {SCORE_MODE_LABEL[modeOf(rid)]}</span></div>
                     {!x ? <div style={{ color: 'var(--text3)', fontSize: '0.85rem' }}>Өгөөгүй</div> : (<>
                       <div style={{ margin: '4px 0' }}>Эцсийн дүн: <b>{x.val}%</b> · {x.n} оролдлого</div>
-                      <div style={{ overflowX: 'auto' }}><table className="tbl"><thead><tr><th>#</th><th>Огноо</th><th>Төрөл</th><th>Дүн</th><th>Хугацаа</th></tr></thead><tbody>
-                        {x.all.map((a, i) => <tr key={a.id}><td>{i + 1}</td><td>{fmtDate(a.at)}</td><td>{a.source === 'zipgrade' ? 'ZipGrade' : a.extra ? 'Нэмэлт (дүнд тооцохгүй)' : a.mode === 'mistakes' ? 'Алдсан асуулт' : 'Бүгд'}</td><td><b>{a.score}%</b></td><td>{fmtDur(a.sec || 0)}</td></tr>)}
+                      <div style={{ overflowX: 'auto' }}><table className="tbl"><thead><tr><th>#</th><th>Огноо</th><th>Төрөл</th><th>Дүн</th><th>Хугацаа</th><th>Cheat</th></tr></thead><tbody>
+                        {x.all.map((a, i) => { const cc = (a.cheatLog || []).length; return <tr key={a.id}><td>{i + 1}</td><td>{fmtDate(a.at)}</td><td>{a.source === 'zipgrade' ? 'ZipGrade' : a.extra ? 'Нэмэлт (дүнд тооцохгүй)' : a.mode === 'mistakes' ? 'Алдсан асуулт' : 'Бүгд'}</td><td><b>{a.score}%</b></td><td>{fmtDur(a.sec || 0)}</td><td>{cc === 0 ? '✓' : <button className="btn btn-outline btn-sm" style={{ color: '#b91c1c', borderColor: '#fca5a5' }} onClick={() => setCheatSub({ studentName: (members[detail] || {}).name || '', studentClass: c?.name || '', cheatLog: a.cheatLog || [] })}>⚠ {cc}</button>}</td></tr>; })}
                       </tbody></table></div></>)}
                     {(zgImgs[rid] || []).length > 0 && (
                       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
